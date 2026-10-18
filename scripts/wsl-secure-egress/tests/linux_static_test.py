@@ -80,6 +80,7 @@ class CrossDistroGuardTests(unittest.TestCase):
                         'shared_guard_profile': self.policy}
         self.tables = {}
         self.writes = []
+        self.saved = []
 
     def kernel(self, argv, ns=None, data=None, **kwargs):
         if argv == ['ip', '-d', '-j', 'link', 'show', 'dev', 'eth0']:
@@ -109,6 +110,25 @@ class CrossDistroGuardTests(unittest.TestCase):
         if argv == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2']:
             return subprocess.CompletedProcess(
                 argv, 0, stdout=json.dumps([{'dev': 'eth0'}]).encode(), stderr=b'')
+        # shared_root_runtime_matches only inspects the root namespace, so a
+        # sibling distro never opens the manager's private /run/netns binds.
+        if (argv[:8] == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2',
+                         'from', manager.TRANSPORT_IP] and
+                argv[8:] == ['iif', manager.ROOT_IF]):
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([{'dev': 'eth0'}]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-N', '-j', 'route', 'show', 'table', manager.ROUTE_TABLE]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'dst': 'default', 'dev': manager.BUS_IF,
+                     'gateway': manager.BUS_GW_IP},
+                    {'dst': 'default', 'type': 'unreachable'},
+                ]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-j', 'rule', 'show']:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'priority': manager.PREF_DEFAULT_DENY,
+                     'table': int(manager.ROUTE_TABLE)}]).encode(), stderr=b'')
         if argv == ['ip', '-4', '-j', 'route', 'show'] and ns == manager.TRANSPORT:
             return subprocess.CompletedProcess(
                 argv, 0, stdout=json.dumps([
@@ -165,8 +185,15 @@ class CrossDistroGuardTests(unittest.TestCase):
         with patch.object(manager, 'STATE', self.state_path), \
                 patch.object(manager, 'private_path', side_effect=lambda path: Path(path)), \
                 patch.object(manager, 'command', side_effect=self.kernel), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
                 patch.object(manager, 'read_profile', side_effect=AssertionError('manager private profile read')):
-            return manager.Manager(manager.parse(['guard'])).boot_guard()
+            instance = manager.Manager(manager.parse(['guard']))
+            instance.save = Mock(side_effect=lambda: self.saved.append(
+                {'phase': instance.s.get('phase'),
+                 'root_namespace': instance.s.get('root_namespace'),
+                 'boot_id': instance.s.get('boot_id')}))
+            return instance.boot_guard()
 
     def test_sibling_boot_retains_exact_running_manager_without_private_manager_state(self):
         for comment in ('cor-egress:manager-owner', None):
@@ -248,7 +275,7 @@ class CrossDistroGuardTests(unittest.TestCase):
     def test_sibling_boot_rejects_open_table_without_live_runtime(self):
         self.tables[manager.TABLE] = manager_table_fixture(
             'manager-owner', True, self.runtime, self.policy)
-        with patch.object(manager, 'shared_manager_runtime_matches', return_value=False) as runtime:
+        with patch.object(manager, 'shared_root_runtime_matches', return_value=False) as runtime:
             self.assertEqual(self.boot()['outcome'], 'blocked')
         runtime.assert_called_once_with(self.policy, 'eth0')
         self.assertEqual(self.writes, [manager.boot_emergency_rules().encode()])
@@ -306,6 +333,127 @@ class CrossDistroGuardTests(unittest.TestCase):
         self.assertNotIn('private_key', json.dumps(instance.s))
         self.assertNotIn('peer_public_key', json.dumps(instance.s))
         self.assertNotIn('unused_future_field', json.dumps(instance.s))
+
+
+class StartEmergencyGuardTests(unittest.TestCase):
+    """start() must never report Running while a boot deny is still present."""
+
+    def setUp(self):
+        self.instance = object.__new__(manager.Manager)
+        self.instance.s = {'phase': 'Running', 'owner': 'owned'}
+        self.instance.load = Mock()
+        self.instance.assert_table = Mock()
+        self.instance.checks = []
+
+    def test_start_refuses_an_existing_boot_emergency_table(self):
+        with patch.object(manager, 'list_table', return_value={'nftables': []}), \
+                self.assertRaises(manager.Blocked) as raised:
+            manager.Manager.start(self.instance)
+        self.assertEqual(str(raised.exception),
+                         'Existing boot emergency table preserved; explicit recovery is required.')
+        self.instance.assert_table.assert_not_called()
+
+    def test_start_proceeds_when_no_boot_emergency_table_exists(self):
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'shared_root_runtime_matches', return_value=True):
+            # Stop before any further work so only the guard question is answered.
+            self.instance.assert_table = Mock(side_effect=manager.Blocked('stop'))
+            with self.assertRaises(manager.Blocked):
+                manager.Manager.start(self.instance)
+        self.instance.assert_table.assert_called_once()
+
+
+class GatewayForwardSysctlTests(unittest.TestCase):
+    """The gateway namespace global ip_forward must be journaled and restored."""
+
+    def setUp(self):
+        self.instance = object.__new__(manager.Manager)
+        self.instance.s = {'uplink': 'eth0', 'forward_sources': [], 'sysctls': [],
+                           'root_namespace': 'current', 'boot_id': 'current'}
+        self.instance.p = {'backend': 'wireguard'}
+        self.instance.save = Mock()
+        self.writes = []
+
+    def kernel(self, argv, ns=None, data=None, **kwargs):
+        self.writes.append((ns, argv, data))
+        if argv[0] == 'cat':
+            # The disable path verifies the value it wrote before restoring.
+            # Journal records hold the value the test intends to observe.
+            record = next((rec for rec in self.instance.s.get('sysctls', [])
+                           if rec.get('path') == argv[1]), None)
+            value = record['written'] if record else '0'
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=(value + '\n').encode(), stderr=b'')
+        return subprocess.CompletedProcess(argv, 0, stdout=b'', stderr=b'')
+
+    def links(self, argv, ns=None, data=None, **kwargs):
+        return [{'ifname': ns or 'root', 'ifindex': 7}]
+
+    def test_enable_journals_and_sets_the_namespace_global_forward(self):
+        with patch.object(manager, 'command', side_effect=self.kernel), \
+                patch.object(manager, 'json_command', side_effect=self.links):
+            manager.Manager.sysctl_forward(self.instance, True)
+        global_records = [rec for rec in self.instance.s['sysctls']
+                          if rec.get('scope') == 'namespace']
+        self.assertEqual(len(global_records), 1)
+        self.assertEqual(global_records[0]['namespace'], manager.GW)
+        self.assertEqual(global_records[0]['path'],
+                         '/proc/sys/net/ipv4/ip_forward')
+        self.assertEqual(global_records[0]['before'], '0')
+        self.assertEqual(global_records[0]['written'], '1')
+        self.assertIn((manager.GW, ['tee', '/proc/sys/net/ipv4/ip_forward'], b'1\n'),
+                      self.writes)
+
+    def test_disable_restores_the_recorded_before_value(self):
+        self.instance.s['sysctls'] = [{
+            'namespace': manager.GW, 'path': '/proc/sys/net/ipv4/ip_forward',
+            'before': '0', 'written': '1', 'scope': 'namespace'}]
+        with patch.object(manager, 'command', side_effect=self.kernel), \
+                patch.object(manager, 'json_command', side_effect=self.links):
+            manager.Manager.sysctl_forward(self.instance, False)
+        self.assertIn((manager.GW, ['tee', '/proc/sys/net/ipv4/ip_forward'], b'0\n'),
+                      self.writes)
+
+
+class SharedRootRuntimeTests(unittest.TestCase):
+    """A sibling distro must never require the manager's private netns binds."""
+
+    policy = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+              'resolver_ipv4': '10.77.0.1'}
+
+    def kernel(self, argv, ns=None, data=None, **kwargs):
+        if argv[:5] == ['ip', '-4', '-j', 'route', 'get']:
+            return [{'dev': 'eth0'}]
+        if argv == ['ip', '-j', 'link', 'show']:
+            return [
+                {'ifname': manager.ROOT_IF, 'flags': ['UP']},
+                {'ifname': manager.BUS_IF, 'flags': ['UP']},
+            ]
+        if argv[5:] == ['show', 'table', manager.ROUTE_TABLE]:
+            return [
+                {'dst': 'default', 'dev': manager.BUS_IF,
+                 'gateway': manager.BUS_GW_IP},
+                {'dst': 'default', 'type': 'unreachable'},
+            ]
+        if argv == ['ip', '-4', '-j', 'rule', 'show']:
+            return [{'priority': manager.PREF_DEFAULT_DENY,
+                     'table': int(manager.ROUTE_TABLE)}]
+        raise AssertionError('Unexpected kernel operation: ' + repr(argv))
+
+    def test_root_only_proof_never_opens_a_private_netns(self):
+        with patch.object(manager, 'valid_uplink_interface', return_value=True), \
+                patch.object(manager, 'json_command', side_effect=self.kernel):
+            self.assertTrue(manager.shared_root_runtime_matches(self.policy, 'eth0'))
+
+    def test_missing_uplink_route_is_rejected(self):
+        def bad_route(argv, ns=None, data=None, **kwargs):
+            if argv[:5] == ['ip', '-4', '-j', 'route', 'get']:
+                return [{'dev': 'other'}]
+            raise AssertionError('unexpected: ' + repr(argv))
+
+        with patch.object(manager, 'valid_uplink_interface', return_value=True), \
+                patch.object(manager, 'json_command', side_effect=bad_route):
+            self.assertFalse(manager.shared_root_runtime_matches(self.policy, 'eth0'))
 
 
 class DistroRestoreTransactionTests(unittest.TestCase):
@@ -692,9 +840,13 @@ class GateTests(unittest.TestCase):
         instance = object.__new__(manager.Manager)
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.load = Mock(side_effect=AssertionError('private profile read'))
+        instance.save = Mock()
+        instance.load = Mock(side_effect=AssertionError('private profile read'))
         instance.event = Mock(return_value={'outcome': 'succeeded'})
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
                 patch.object(manager, 'command') as command:
             instance.boot_guard()
         instance.load.assert_not_called()
@@ -704,11 +856,17 @@ class GateTests(unittest.TestCase):
         instance = object.__new__(manager.Manager)
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.event = Mock(return_value={'outcome': 'succeeded'})
+        instance.save = Mock()
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
                 patch.object(manager, 'command') as command:
             instance.boot_guard()
         command.assert_not_called()
+        # The sibling refresh persists this boot's shared-root identity.
+        self.assertEqual(instance.s['root_namespace'], 'current')
+        self.assertEqual(instance.s['boot_id'], 'current')
 
     def test_distro_config_unknown_table_gets_independent_emergency_deny(self):
         instance = object.__new__(manager.Manager)
@@ -756,9 +914,13 @@ class GateTests(unittest.TestCase):
         instance = object.__new__(manager.Manager)
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.load = Mock(side_effect=AssertionError('private profile read'))
+        instance.save = Mock()
+        instance.load = Mock(side_effect=AssertionError('private profile read'))
         instance.event = Mock(return_value={'outcome': 'succeeded'})
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='manager'), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
                 patch.object(manager, 'ensure_boot_emergency_deny') as emergency:
             instance.boot_guard()
         instance.load.assert_not_called()
