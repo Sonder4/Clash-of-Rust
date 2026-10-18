@@ -55,6 +55,10 @@ MANAGER_LOCK_WAIT_SECONDS = 15
 MANAGER_LOCK_POLL_SECONDS = 0.05
 INTEROP = Path('/proc/sys/fs/binfmt_misc/WSLInterop')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'LANG': 'C'}
+ISOLATED_TEST_ENV = (
+    os.environ.get('CI') == 'true'
+    and os.environ.get('COR_EGRESS_ISOLATED_CI') == '1'
+)
 SECCOMP_ARCH_OFFSET = 4
 SECCOMP_NR_OFFSET = 0
 SECCOMP_ARG0_OFFSET = 16
@@ -363,14 +367,18 @@ def table_items(name):
     return listed.get('nftables', [])
 
 
-def table_classification(name):
+def table_classification(name, state=None):
     """Classify the shared guard without ever mutating an unknown table."""
     if list_table(name) is None:
         return 'absent'
+    if (name == TABLE and isinstance(state, dict) and
+            manager_table_matches_opened_install(state)):
+        return 'manager'
     if name == TABLE and static_boot_matches():
         return 'static'
-    if name == TABLE and manager_table_matches_installed():
-        return 'manager'
+    if name == TABLE:
+        if state is None and manager_table_matches_installed():
+            return 'manager'
     return 'unknown'
 
 
@@ -695,6 +703,13 @@ def valid_uplink_interface(name):
         if len(links) != 1 or links[0].get('ifname') != name:
             return False
         kind = links[0].get('linkinfo', {}).get('info_kind')
+        if (kind == 'veth' and ISOLATED_TEST_ENV and
+                name == 'fixture-uplink'):
+            # The disposable kernel test uses a veth solely to provide a
+            # reachable on-link endpoint. This exact exception requires both
+            # explicit test gates and is evaluated before main() sanitizes the
+            # helper environment. Production WSL eth0 never matches it.
+            return True
         if kind is not None and kind not in ('device',):
             return False
         return True
@@ -868,6 +883,33 @@ def manager_table_matches_installed():
     return False
 
 
+def manager_table_matches_opened_install(state):
+    """Prove a surviving opened manager table is safe to replace closed."""
+    if not isinstance(state, dict):
+        return False
+    owner = state.get('owner')
+    if (state.get('role') == 'distro-config' or
+            not isinstance(owner, str) or not owner or
+            state.get('phase') != 'Running'):
+        return False
+    items = table_items(TABLE)
+    if items is None:
+        return False
+    table = next((item.get('table') for item in items if 'table' in item), None)
+    if not table:
+        return False
+    comment = table.get('comment')
+    if comment is not None and comment != 'cor-egress:' + owner:
+        return False
+    try:
+        profile = read_profile(state['profile'])
+    except (Blocked, KeyError, TypeError, ValueError, OSError):
+        return False
+    return (table_hash() == state.get('tables', {}).get('root') and
+            manager_table_matches(owner, opened=True, state=state, profile=profile) and
+            shared_manager_runtime_matches(profile, state.get('uplink')))
+
+
 def boot_guard_command():
     return '/usr/local/lib/cor-egress/manager guard'
 
@@ -941,7 +983,15 @@ class Manager:
         routes = self.policy_routes()
         guard = table_hash()
         emergency = list_table(BOOT_EMERGENCY)
-        guard_class = table_classification(TABLE)
+        guard_class = table_classification(TABLE, self.s)
+        # During an in-place cold boot the journal stays Running, so the
+        # generic classified helper cannot authenticate an opened table from
+        # disk without changing phase first. Prove it against this generation's
+        # exact journal and profile before replacing it with the closed guard.
+        was_running = self.s.get('phase') == 'Running'
+        if (guard_class == 'unknown' and was_running and
+                manager_table_matches_opened_install(self.s)):
+            guard_class = 'manager'
         if any(x.get('priority') in RULE_PREFS for x in rules) or routes or (
                 guard_class not in ('absent', 'static', 'manager')) or emergency is not None:
             raise Blocked('New namespace already contains reserved policy objects; no ownership assumed.')
@@ -950,18 +1000,26 @@ class Manager:
         # while the old state and ownership hash are still available. The
         # journal must never reach Guarded while an opened manager policy is
         # left behind for the next distro to inherit.
-        was_running = self.s.get('phase') == 'Running'
         # boot_guard may already have created the exact static deny in a
         # fresh VM. That table is closed and its new hash is adopted below;
         # only a surviving opened manager table needs closing here.
         if was_running and guard_class == 'manager':
+            # install_manager_after_boot_guard runs after this method and
+            # must recognize the exact closed replacement rather than retest
+            # the old opened policy against the now-mutated journal phase.
+            self.s['reconciled_from_running'] = True
+            # replace_table performs the ownership CAS before deleting and
+            # recreating the table in one nft transaction.
             self.replace_table(self.root_rules())
             guard = table_hash()
+            if guard is None or not static_boot_matches():
+                raise Blocked('Cold-boot replacement did not produce an exact closed guard.')
         self.s.setdefault('previous_boots', []).append({
             'root_namespace': self.s['root_namespace'], 'phase': self.s['phase'],
             'boot_id': self.s.get('boot_id'),
             'runtime_hash': digest(encode({k: self.s.get(k) for k in ('namespaces', 'routing', 'sysctls', 'tables')}))})
-        for key in ('routing', 'sysctls', 'veth_index', 'business_veth_index', 'emergency', 'attestation'):
+        for key in ('routing', 'sysctls', 'veth_index', 'business_veth_index', 'emergency',
+                    'attestation'):
             self.s.pop(key, None)
         self.s['namespaces'] = {}
         # The shared guard is the only object that survives a WSL root
@@ -973,6 +1031,17 @@ class Manager:
         self.s['root_namespace'] = current
         self.s['boot_id'] = boot_id()
         self.s['phase'] = 'Guarded'
+        # Only retain the reconciliation signal if this boot still needs the
+        # adoption pass to recognize the closed replacement it just created.
+        keep_reconciled = bool(self.s.get('reconciled_from_running'))
+        if not keep_reconciled:
+            self.s.pop('reconciled_from_running', None)
+        else:
+            # boot_guard calls install_manager_after_boot_guard immediately
+            # after reconciliation. That step consumes this one-shot signal
+            # and saves the final journal, so a crash cannot leave stale
+            # reconciliation authority behind.
+            self.s['reconciled_root_hash'] = guard
         self.save()
 
     def event(self, action, outcome, message, phase=None):
@@ -1023,6 +1092,8 @@ class Manager:
         actual = table_hash()
         if actual is None:
             return False
+        if self.s.get('tables', {}).get('root') == actual:
+            return False
         if static_boot_matches():
             return True
         if manager_table_matches(self.s.get('owner'), opened=self.s.get('phase') == 'Running',
@@ -1041,12 +1112,38 @@ class Manager:
         # static boot policy, so manager_table_matches cannot distinguish the
         # two from rules alone. Prefer the static classification here and
         # adopt it explicitly, recording the hash in the manager journal.
+        # A cold-boot reconciliation may have closed a surviving opened
+        # manager table immediately before this adoption pass. In that path
+        # the exact new hash is already journaled, so accept only that hash.
+        expected = self.s.get('reconciled_root_hash')
+        if expected and table_hash() == expected and static_boot_matches():
+            # In WSL's nft 1.0.2 the manager's closed and static rules can
+            # canonicalize to the same JSON shape. The hash was recorded after
+            # the authenticated delete/create transaction, so this exact pair
+            # is the ownership proof for the one-shot adoption.
+            self.dirty = True
+            self.s.setdefault('tables', {})['root'] = expected
+            self.s.pop('reconciled_from_running', None)
+            self.s.pop('reconciled_root_hash', None)
+            self.save()
+            return
         if static_boot_matches():
+            if self.s.get('tables', {}).get('root') == actual:
+                # The journal's exact root hash authenticates a compact closed
+                # manager guard even when nft 1.0.2 renders it like the fixed
+                # static first-start deny.
+                self.dirty = True
+                self.s.setdefault('tables', {})['root'] = actual
+                self.save()
+                return
             self.dirty = True
             command(['nft', '-f', '-'], data=(
                 'delete table inet ' + TABLE + '\n' + self.root_rules()).encode())
             self.s.setdefault('tables', {})['root'] = table_hash()
             self.save()
+            return
+        if (self.s.get('tables', {}).get('root') == actual and
+                manager_table_matches(self.s.get('owner'), opened=False)):
             return
         running = self.s.get('phase') == 'Running'
         if manager_table_matches(self.s.get('owner'), opened=running,
@@ -1791,7 +1888,15 @@ class Manager:
             )
         # Establish a first-start deny before reading private state or profile.
         # If manager state is unavailable, this static table remains in force.
-        state = ensure_static_boot_guard()
+        # A surviving opened manager table is authenticated against this
+        # generation's private journal below. Do not replace it with a static
+        # table here, because that would hide the old opened shape before the
+        # cold-boot reconciliation can prove and close it.
+        if (self.s.get('phase') == 'Running' and
+                manager_table_matches_opened_install(self.s)):
+            state = 'manager'
+        else:
+            state = ensure_static_boot_guard()
         if state == 'unknown':
             ensure_boot_emergency_deny()
             raise Blocked('Unknown shared guard preserved; boot emergency deny installed.')

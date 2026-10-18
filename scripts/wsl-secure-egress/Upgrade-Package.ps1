@@ -46,7 +46,12 @@ function Protect-PackageDirectory([string]$Path) {
 
 function Get-PackageHash([string]$Path) {
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+        $stream = [IO.File]::OpenRead($Path)
+        try {
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            try { return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '') }
+            finally { $hasher.Dispose() }
+        } finally { $stream.Dispose() }
     }
     return $null
 }
@@ -402,7 +407,7 @@ function Invoke-PackageUpgrade {
                         throw 'The post-upgrade WSL guard is not confirmed closed.'
                     }
                     foreach ($file in @($HelperTargets)) {
-                        if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne
+                        if ((Get-PackageHash $file) -ne
                             (@($Journal.files | Where-Object { $_.target -eq $file })[0].after)) {
                             throw 'An installed helper resource changed during upgrade.'
                         }

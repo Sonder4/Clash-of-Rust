@@ -12,10 +12,36 @@
 [CmdletBinding()]
 param(
     [switch]$Execute,
-    [string]$Distro
+    [string]$Distro,
+    [string]$StatusPath
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+function Read-PayloadUpdateStatus([string]$Path) {
+    if (-not $Path) { return $null }
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+        $record = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        if ($record.PSObject.Properties['stage'] -and [string]$record.stage) {
+            return [string]$record.stage
+        }
+    } catch {
+        return $null
+    }
+    return $null
+}
+function Write-PayloadUpdateFailure([string]$Stage, [System.Management.Automation.ErrorRecord]$ErrorRecord) {
+    [ordered]@{
+        schema_version = 1
+        action = 'update-live-payload'
+        outcome = 'failed'
+        stage = $Stage
+        error_type = $ErrorRecord.Exception.GetType().FullName
+        error_id = [string]$ErrorRecord.FullyQualifiedErrorId
+        line = [int]$ErrorRecord.InvocationInfo.ScriptLineNumber
+        message = 'Payload upgrade failed; endpoint remains closed and the journal is retained for review.'
+    } | ConvertTo-Json -Compress
+}
 if (-not $Execute) {
     [ordered]@{
         schema_version = 1
@@ -27,10 +53,18 @@ if (-not $Execute) {
     exit 0
 }
 $module = Import-Module (Join-Path $PSScriptRoot 'WslSecureEgress.psm1') -Force -PassThru -DisableNameChecking
+$progress = [pscustomobject]@{ stage = 'preflight' }
 try {
-    $script:WslEgressPayloadUpdateStage = 'preflight'
     $result = & $module {
-        param($RequestedDistro)
+        param($RequestedDistro, $Progress, $StatusFile)
+        $setStage = {
+            param([string]$Stage)
+            $Progress.stage = $Stage
+            if ($StatusFile) {
+                [ordered]@{ stage = $Stage } | ConvertTo-Json -Compress |
+                    Set-Content -LiteralPath $StatusFile -Encoding ASCII -ErrorAction Stop
+            }
+        }
         if (-not (Test-WslEgressAdministrator)) {
             throw 'Administrator required for the reviewed payload upgrade.'
         }
@@ -64,14 +98,14 @@ try {
                 throw 'Start the manager distribution before the reviewed payload upgrade.'
             }
         }
-        $script:WslEgressPayloadUpdateStage = 'payload_stage'
+        & $setStage 'payload_stage'
         Install-WslEgressPayload $state $distro -ReviewedUpgrade
-        $script:WslEgressPayloadUpdateStage = 'manager_repair'
+        & $setStage 'manager_repair'
         $repair = Invoke-WslEgressLinux $state 'repair-config'
         if ($repair.outcome -ne 'succeeded') {
             throw 'Manager repair-config did not succeed after the payload upgrade.'
         }
-        $script:WslEgressPayloadUpdateStage = 'configuration_audit'
+        & $setStage 'configuration_audit'
         $audit = Invoke-WslEgressLinux $state 'audit-config'
         if ($audit.outcome -ne 'succeeded' -or
             -not $audit.facts.owned_config_matches -or
@@ -97,21 +131,14 @@ try {
         Save-WslEgressJson $result $receipt
         $result['receipt'] = $receipt
         $result
-    } $Distro
+    } $Distro $progress $StatusPath
     $result | ConvertTo-Json -Depth 8 -Compress
 } catch {
-    $failureStage = if ($script:WslEgressPayloadUpdateStage) {
-        [string]$script:WslEgressPayloadUpdateStage
-    } else { 'preflight' }
-    [ordered]@{
-        schema_version = 1
-        action = 'update-live-payload'
-        outcome = 'failed'
-        stage = $failureStage
-        error_type = $_.Exception.GetType().FullName
-        error_id = [string]$_.FullyQualifiedErrorId
-        line = [int]$_.InvocationInfo.ScriptLineNumber
-        message = 'Payload upgrade failed; endpoint remains closed and the journal is retained for review.'
-    } | ConvertTo-Json -Compress
+    # Module scope cannot reliably assign properties on a caller-owned object
+    # under every host. The optional status file provides the durable boundary;
+    # retain the in-memory object too for direct/imported-script invocation.
+    $failureStage = Read-PayloadUpdateStatus $StatusPath
+    if (-not $failureStage) { $failureStage = [string]$progress.stage }
+    Write-PayloadUpdateFailure $failureStage $_
     exit 1
 }

@@ -42,6 +42,8 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal $roundtrip.single.Count 1 'single-item journal array has one item'
     Assert-Equal $roundtrip.multiple.Count 2 'multi-item journal array retains both items'
     Assert-Equal ($roundtrip.map -is [Collections.IDictionary]) $true 'JSON maps remain dictionaries'
+    $legacyPending = ConvertTo-WslEgressOrderedState ('{"distro_config_pending":[null]}' | ConvertFrom-Json)
+    Assert-Equal (@($legacyPending.distro_config_pending | Where-Object { $null -ne $_ }).Count) 0 'a serialized null pending item is not a configured distro'
     $doctor = Invoke-WslEgressOperation -Action Doctor
     Assert-Equal $doctor.outcome 'succeeded' 'doctor works without administrator'
     Assert-Equal $doctor.protection 'unknown' 'uninstalled does not claim protection'
@@ -159,6 +161,27 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal ($upgradeText.Contains('repair-config')) $true 'live upgrade reruns the manager repair path'
     Assert-Equal ($upgradeText.Contains('-ReviewedUpgrade')) $true 'live upgrade uses the atomic reviewed upgrade gate'
     Assert-Equal ($upgradeText.Contains('Set-WslEgressEndpoint $state $true')) $false 'live upgrade never opens the endpoint'
+    Assert-Equal ($upgradeText.Contains('$Progress.stage')) $true 'live upgrade records the exact failure stage through caller-owned state'
+    Assert-Equal ($upgradeText.Contains('$StatusFile')) $true 'live upgrade durably records the exact failure stage across module scope'
+    $stageFixture = Join-Path ([IO.Path]::GetTempPath()) ('cor-egress-stage-' + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+        $script = {
+            param($StatusPath)
+            $stageModule = New-Module -ScriptBlock {
+                function Set-Stage([string]$Path) {
+                    [ordered]@{ stage = 'manager_repair' } | ConvertTo-Json -Compress |
+                        Set-Content -LiteralPath $Path -Encoding ASCII
+                }
+                Export-ModuleMember -Function Set-Stage
+            } | Import-Module -PassThru
+            & $stageModule { param($Path) Set-Stage $Path } $StatusPath
+        }
+        & $script $stageFixture
+        $stageRecord = Get-Content -LiteralPath $stageFixture -Raw | ConvertFrom-Json
+        Assert-Equal $stageRecord.stage 'manager_repair' 'module failure stage survives caller scope'
+    } finally {
+        Remove-Item -LiteralPath $stageFixture -Force -ErrorAction SilentlyContinue
+    }
     # Use the real local SID/account mapping without touching Task Scheduler.
     # On the regression host this is XUAN\xuan; resolving bare "xuan" fails,
     # which exercises the short-name readback fallback used by Task Scheduler.

@@ -259,6 +259,30 @@ class CrossDistroGuardTests(unittest.TestCase):
                 'linkinfo': {'info_kind': 'veth'}}]):
             self.assertFalse(manager.valid_uplink_interface('eth0'))
 
+    def test_shared_uplink_classifier_accepts_only_exact_isolated_ci_fixture(self):
+        fixture = [{'ifname': 'fixture-uplink', 'flags': ['UP'],
+                    'linkinfo': {'info_kind': 'veth'}}]
+        with patch.object(manager, 'ISOLATED_TEST_ENV', True), \
+                patch.object(manager, 'json_command', return_value=fixture):
+            self.assertTrue(manager.valid_uplink_interface('fixture-uplink'))
+
+    def test_shared_uplink_classifier_requires_both_isolated_ci_gates(self):
+        fixture = [{'ifname': 'fixture-uplink', 'flags': ['UP'],
+                    'linkinfo': {'info_kind': 'veth'}}]
+        with patch.object(manager, 'ISOLATED_TEST_ENV', False), \
+                patch.object(manager, 'json_command', return_value=fixture):
+            self.assertFalse(manager.valid_uplink_interface('fixture-uplink'))
+
+    def test_shared_uplink_classifier_rejects_other_virtual_fixture_name_or_kind(self):
+        with patch.object(manager, 'ISOLATED_TEST_ENV', True):
+            for name, kind in (('other-uplink', 'veth'),
+                               ('fixture-uplink', 'wireguard')):
+                with self.subTest(name=name, kind=kind), \
+                        patch.object(manager, 'json_command', return_value=[{
+                            'ifname': name, 'flags': ['UP'],
+                            'linkinfo': {'info_kind': kind}}]):
+                    self.assertFalse(manager.valid_uplink_interface(name))
+
     def test_shared_uplink_classifier_rejects_virtual_link_name(self):
         with patch.object(manager, 'json_command') as json_command:
             self.assertFalse(manager.valid_uplink_interface('docker0'))
@@ -463,6 +487,46 @@ class GateTests(unittest.TestCase):
     def test_boot_guard_uses_fixed_installed_wrapper(self):
         self.assertEqual(manager.boot_guard_command(),
                          '/usr/local/lib/cor-egress/manager guard')
+
+    def test_distro_prepare_snapshots_fixed_boot_guard_for_every_role(self):
+        for role in ('manager', 'distro-config'):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                files = {
+                    '/etc/wsl.conf': root / 'wsl.conf',
+                    '/etc/resolv.conf': root / 'resolv.conf',
+                    '/etc/hosts': root / 'hosts',
+                }
+                instance = object.__new__(manager.Manager)
+                instance.s = {'role': role}
+                instance.p = {'resolver_ipv4': '10.77.0.1'}
+                instance.snapshot = Mock()
+
+                def fixture_path(value):
+                    return files.get(str(value), Path(value))
+
+                with patch.object(manager, 'Path', side_effect=fixture_path), \
+                        patch.object(manager.socket, 'gethostname', return_value='fixture-wsl'):
+                    instance.distro_prepare()
+
+                snapshots = {
+                    Path(call.args[0]).name: call.args[1]
+                    for call in instance.snapshot.call_args_list
+                }
+                wsl_conf = snapshots['wsl.conf'].decode()
+                self.assertIn('[network]', wsl_conf)
+                self.assertIn('generateResolvConf = false', wsl_conf)
+                self.assertIn('generateHosts = false', wsl_conf)
+                self.assertIn('[interop]', wsl_conf)
+                self.assertIn('enabled = false', wsl_conf)
+                self.assertIn('appendWindowsPath = false', wsl_conf)
+                self.assertIn('[boot]', wsl_conf)
+                self.assertIn('command = ' + manager.boot_guard_command(), wsl_conf)
+                self.assertEqual(
+                    snapshots['resolv.conf'],
+                    b'nameserver 10.77.0.1\noptions timeout:2 attempts:1\n')
+                self.assertIn(b'127.0.1.1 fixture-wsl\n', snapshots['hosts'])
+                self.assertEqual(instance.snapshot.call_count, 3)
 
     def test_existing_emergency_table_blocks_both_boot_paths(self):
         for role in ('manager', 'distro-config'):
@@ -784,7 +848,9 @@ class GateTests(unittest.TestCase):
             'owner': 'owned', 'phase': 'Running', 'root_namespace': 'old',
             'boot_id': 'old', 'namespaces': {}, 'tables': {'root': 'opened'},
             'uplink': 'eth0', 'root_sources': ['10.20.0.1/32'],
-            'forward_sources': [],
+            'forward_sources': [
+                {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+            ],
         }
         instance.p = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
                       'resolver_ipv4': '10.77.0.1'}
@@ -801,6 +867,8 @@ class GateTests(unittest.TestCase):
                 patch.object(manager, 'json_command', side_effect=[[], []]), \
                 patch.object(manager, 'table_hash', side_effect=['opened', 'closed']), \
                 patch.object(manager, 'table_classification', return_value='manager'), \
+                patch.object(manager, 'manager_table_matches_opened_install', return_value=True), \
+                patch.object(manager, 'static_boot_matches', return_value=True), \
                 patch.object(manager, 'list_table', return_value=None):
             instance.boot_reconcile()
         self.assertEqual(events[0], ('close', 'Running', 'closed-rules'))
@@ -815,6 +883,11 @@ class GateTests(unittest.TestCase):
             'namespaces': {manager.GW: {'inode': 'old'}},
             'tables': {'root': 'old-opened', manager.GW: 'old-gateway'},
             'attestation': 'old-audit', 'veth_index': 22,
+            'uplink': 'eth0',
+            'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+            'forward_sources': [
+                {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+            ],
         }
         instance.args = manager.parse(['guard'])
         instance.p = None
@@ -852,15 +925,19 @@ class GateTests(unittest.TestCase):
             self.fail('Unexpected cold-boot kernel operation: ' + repr(argv))
 
         with patch.object(manager, 'command', side_effect=kernel), \
+                patch.object(manager, 'manager_table_matches_opened_install',
+                             return_value=False), \
                 patch.object(manager.os, 'readlink', return_value='new'), \
                 patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager, 'table_classification',
+                             side_effect=['absent', 'static', 'static', 'static']), \
                 patch.object(manager.Path, 'exists', return_value=False), \
                 patch.object(manager.Path, 'is_symlink', return_value=False):
             result = instance.boot_guard()
             final_hash = manager.table_hash()
-            self.assertTrue(manager.manager_table_matches('owned'))
+            self.assertIsNotNone(final_hash)
         self.assertEqual(result['outcome'], 'succeeded')
-        self.assertEqual(len(writes), 2)
+        self.assertEqual(len(writes), 1)
         self.assertEqual(writes[0], manager.static_boot_rules().encode())
         self.assertEqual(saved[0]['phase'], 'Guarded')
         self.assertNotEqual(saved[0]['tables']['root'], 'old-opened')
@@ -869,6 +946,112 @@ class GateTests(unittest.TestCase):
         self.assertEqual(instance.s['namespaces'], {})
         self.assertNotIn('attestation', instance.s)
         self.assertNotIn('veth_index', instance.s)
+
+    def test_cold_boot_running_journal_closes_surviving_opened_manager_guard(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {
+            'owner': 'owned', 'generation': 71, 'role': 'manager',
+            'phase': 'Running', 'root_namespace': 'old', 'boot_id': 'old',
+            'namespaces': {manager.GW: {'inode': 'old'}},
+            'tables': {'root': 'old-opened', manager.GW: 'old-gateway'},
+            'attestation': 'old-audit', 'veth_index': 22,
+            'uplink': 'eth0',
+            'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+            'forward_sources': [
+                {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+            ],
+        }
+        instance.args = manager.parse(['guard'])
+        instance.p = dict(endpoint_ipv4='192.0.2.2', endpoint_port=51820,
+                          resolver_ipv4='10.77.0.1')
+        instance.checks = []
+        instance.load = Mock(side_effect=lambda: setattr(instance, 'p', {
+            'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+            'resolver_ipv4': '10.77.0.1'}))
+        instance.rollback_attempted = False
+        instance.dirty = False
+        instance.close_requested = True
+        instance.policy_routes = Mock(return_value=[])
+        instance.interop_guard = Mock()
+        runtime = {'uplink': 'eth0', 'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+                   'forward_sources': [
+                       {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+                   ]}
+        policy = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                  'resolver_ipv4': '10.77.0.1'}
+        instance.s['tables']['root'] = manager.digest(
+            manager.encode(manager.clean_nft(manager_table_fixture(
+                'owned', True, instance.s, policy))))
+        opened = manager_table_fixture('owned', True, runtime, policy)
+        tables = {manager.TABLE: opened, manager.BOOT_EMERGENCY: None}
+        writes, saved = [], []
+        instance.save = Mock(
+            side_effect=lambda: saved.append(json.loads(json.dumps(instance.s))))
+
+        def kernel(argv, ns=None, data=None, **kwargs):
+            self.assertIsNone(ns)
+            if argv[:5] == ['nft', '-j', 'list', 'table', 'inet']:
+                key = argv[5]
+                listed = tables.get(key)
+                return subprocess.CompletedProcess(
+                    argv, 0 if listed is not None else 1,
+                    stdout=json.dumps(listed).encode() if listed is not None else b'',
+                    stderr=b'' if listed is not None else b'No such file or directory')
+            if argv == ['nft', '-f', '-'] and data == manager.boot_emergency_rules().encode():
+                self.fail('An existing opened manager guard must be closed before emergency recovery.')
+            if argv == ['nft', '-f', '-']:
+                writes.append(data)
+                if data == manager.static_boot_rules().encode():
+                    self.fail('An existing opened manager guard must be closed, not shadowed.')
+                self.assertEqual(
+                    data, ('delete table inet ' + manager.TABLE + '\n' +
+                           instance.root_rules()).encode())
+                tables[manager.TABLE] = manager_table_fixture('owned')
+                return subprocess.CompletedProcess(argv, 0, stdout=b'', stderr=b'')
+            if argv in (['ip', '-j', 'link', 'show'],
+                        ['ip', '-4', '-j', 'rule', 'show']):
+                return subprocess.CompletedProcess(argv, 0, stdout=b'[]', stderr=b'')
+            if argv == ['ip', '-d', '-j', 'link', 'show', 'dev', 'eth0']:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps([{
+                        'ifname': 'eth0', 'flags': ['UP'], 'linkinfo': {}
+                    }]).encode(), stderr=b'')
+            if argv == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2']:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps([{'dev': 'eth0'}]).encode(), stderr=b'')
+            if argv == ['ip', '-j', 'link', 'show']:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps([
+                        {'ifname': 'eth0', 'flags': ['UP']},
+                    ]).encode(), stderr=b'')
+            self.fail('Unexpected cold-boot kernel operation: ' + repr(argv))
+
+        with patch.object(manager, 'command', side_effect=kernel), \
+                patch.object(manager, 'manager_table_matches_opened_install',
+                             return_value=True), \
+                patch.object(manager, 'static_boot_matches', return_value=True), \
+                patch.object(manager, 'table_classification', return_value='manager'), \
+                patch.object(manager.os, 'readlink', return_value='new'), \
+                patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager.Path, 'exists', return_value=False), \
+                patch.object(manager.Path, 'is_symlink', return_value=False):
+            def load_profile():
+                instance.s['profile'] = '/etc/cor-egress/profile.json'
+                instance.s['profile_hash'] = 'opened-profile-hash'
+                instance.p = policy
+            instance.load = load_profile
+            result = instance.boot_guard()
+            final_hash = manager.table_hash()
+            self.assertIsNotNone(final_hash)
+        self.assertEqual(result['outcome'], 'succeeded')
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(instance.s['tables'], {'root': final_hash})
+        self.assertEqual(instance.s['phase'], 'Guarded')
+        self.assertEqual(instance.s['namespaces'], {})
+        self.assertNotIn('attestation', instance.s)
+        self.assertNotIn('veth_index', instance.s)
+        self.assertNotIn('reconciled_from_running', instance.s)
+        self.assertNotIn('reconciled_root_hash', instance.s)
 
     def test_unknown_table_never_gets_overwritten(self):
         instance = object.__new__(manager.Manager)
@@ -882,6 +1065,89 @@ class GateTests(unittest.TestCase):
             with self.assertRaisesRegex(manager.Blocked, 'preserving'):
                 instance.install_manager_after_boot_guard()
         command.assert_not_called()
+
+    def test_cold_boot_negative_matrix_never_deletes_unproven_manager_table(self):
+        """Only the exact journal/profile/runtime match may authorize deletion."""
+        policy = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                  'resolver_ipv4': '10.77.0.1'}
+        runtime = {
+            'uplink': 'eth0',
+            'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+            'forward_sources': [
+                {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+            ],
+        }
+        valid_items = manager_table_fixture('owned', True, runtime, policy)
+        valid_hash = manager.digest(manager.encode(manager.clean_nft(valid_items)))
+        base_state = {
+            'owner': 'owned', 'role': 'manager', 'phase': 'Running',
+            'profile': '/etc/cor-egress/profile.json',
+            'uplink': 'eth0', 'tables': {'root': valid_hash},
+        }
+        base_state.update(runtime)
+        cases = {
+            'journal hash mismatch': (
+                {**base_state, 'tables': {'root': 'different'}},
+                valid_items, policy, False, valid_hash),
+            'missing profile': (
+                {**base_state, 'profile': '/missing/profile.json'},
+                valid_items, FileNotFoundError(), False, valid_hash),
+            'foreign table comment': (base_state, manager_table_fixture(
+                'foreign', True, runtime, policy), policy, False, valid_hash),
+            'transport namespace missing': (
+                base_state, valid_items, policy, False,
+                valid_hash),
+            'endpoint mismatch': (
+                base_state, manager_table_fixture(
+                    'owned', True, runtime,
+                    {**policy, 'endpoint_ipv4': '192.0.2.99'}), policy, False,
+                manager.digest(manager.encode(manager.clean_nft(
+                    manager_table_fixture(
+                        'owned', True, runtime,
+                        {**policy, 'endpoint_ipv4': '192.0.2.99'}))))),
+            'root route mismatch': (
+                base_state, manager_table_fixture(
+                    'owned', True,
+                    {**runtime, 'root_sources': ['10.20.0.99/32',
+                                                 manager.BUS_ROOT_IP + '/32']},
+                    policy), policy, False,
+                manager.digest(manager.encode(manager.clean_nft(
+                    manager_table_fixture(
+                        'owned', True,
+                        {**runtime, 'root_sources': ['10.20.0.99/32',
+                                                     manager.BUS_ROOT_IP + '/32']},
+                        policy))))),
+            'not running phase': (
+                {**base_state, 'phase': 'Guarded'}, valid_items, policy, False,
+                valid_hash),
+            'distro config role': (
+                {**base_state, 'role': 'distro-config'}, valid_items, policy,
+                False, valid_hash),
+            'exact surviving manager': (
+                base_state, valid_items, policy, True, valid_hash),
+        }
+        for name, (state, listed_items, loaded_profile, expected,
+                   observed_hash) in cases.items():
+            with self.subTest(name=name):
+                with patch.object(
+                        manager, 'table_items', return_value=listed_items['nftables']), \
+                        patch.object(
+                            manager, 'table_hash',
+                            return_value=observed_hash), \
+                        patch.object(manager, 'read_profile',
+                                     side_effect=loaded_profile
+                                     if isinstance(loaded_profile, Exception)
+                                     else loaded_profile), \
+                        patch.object(manager, 'manager_table_matches',
+                                     return_value=True), \
+                        patch.object(manager, 'shared_manager_runtime_matches',
+                                     return_value=False
+                                     if name == 'transport namespace missing'
+                                     else True), \
+                        patch.object(manager, 'command') as command:
+                    observed = manager.manager_table_matches_opened_install(state)
+                self.assertEqual(observed, expected, name)
+                command.assert_not_called()
 
     def test_static_boot_rules_have_owned_comment_and_drop_chains(self):
         rules = manager.static_boot_rules()
@@ -1095,7 +1361,12 @@ class GateTests(unittest.TestCase):
             self.assertEqual(argv[0], "unshare")
             for flag in ("--net", "--mount", "--pid", "--fork", "--mount-proc", "--kill-child=SIGKILL"):
                 self.assertIn(flag, argv)
-            self.assertIn("--_isolated-parent", argv)
+            # The mount namespace must exist before the launcher can stage the
+            # manager outside a private tmpfs. Only the internal exec fragment
+            # names the parent-namespace proof argument.
+            exec_fragment = argv[argv.index("-c") + 1]
+            self.assertIn("--_isolated-parent=", exec_fragment)
+            self.assertEqual(argv[-1], '{"net": 1, "mnt": 2, "pid": 3}')
             mounts.assert_not_called()
             fixture.assert_not_called()
             run.assert_called_once()

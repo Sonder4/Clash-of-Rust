@@ -11,10 +11,12 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         if ($Actual -cne $Expected) { throw "FAIL: $Name" }
         $script:Assertions++
     }
+    $completeInstallationImplementation = (Get-Command Test-WslEgressCompleteInstallation).ScriptBlock
     function Reset-Fixture {
         $script:Calls.Clear(); $script:Writes.Clear()
         $script:Administrator = $true; $script:AuditValid = $true
         $script:BaselineGood = $true; $script:ScopeGood = $true
+        $script:CompleteInstallation = $false
         $script:Running = @('Ubuntu')
         $script:Fixture = [ordered]@{
             schema_version = 1; owner = 'ClashOfRust.WslEgress'; owner_sid = 'S-1-5-21-fixture'
@@ -41,6 +43,11 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     }
     function script:Protect-WslEgressDirectory { param([string]$Path) }
     function script:Get-WslEgressGuardAudit { [pscustomobject]@{ valid = $script:AuditValid; issues = @() } }
+    function script:Test-WslEgressCompleteInstallation {
+        param($State, $Distributions)
+        $script:Calls.Add('complete-installation-audit')
+        [bool]$script:CompleteInstallation
+    }
     function script:Get-WslEgressScopeAttestation {
         $script:Calls.Add('full-scope-audit')
         [ordered]@{ schema = 1; generation = 41; issued_at_unix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -192,19 +199,305 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         Reset-Fixture
         $script:Fixture.phase = $failedPhase
         $script:Fixture.endpoint_enabled = $false
+        $script:Fixture.linux_manager_install_started = $true
         $script:Running = @()
         $blockedInstall = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\egress.json'
-        Assert-Equal $blockedInstall.outcome 'blocked' "$failedPhase Install cannot adopt incomplete state"
+        Assert-Equal $blockedInstall.outcome 'blocked' "$failedPhase Install cannot recover after Linux install started"
         Assert-Equal $blockedInstall.phase $failedPhase "$failedPhase Install preserves recovery phase"
-        Assert-Equal (@($script:Calls | Where-Object { $_ -notin @('baseline', 'running-inventory') }).Count -eq 0) $true "$failedPhase Install performs no mutating network or WSL operation"
+        Assert-Equal (@($script:Calls | Where-Object { $_ -notin @('baseline', 'running-inventory', 'complete-installation-audit') }).Count -eq 0) $true "$failedPhase Install performs no mutating network or WSL operation"
     }
+
+    Reset-Fixture
+    $script:Fixture.phase = 'blocked'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Fixture.linux_manager_install_started = $true
+    $script:Fixture.linux_manager_installed = $false
+    $script:CompleteInstallation = $true
+    $script:Running = @()
+    $adoptedHistorical = Invoke-WslEgressOperation -Action Install -Execute
+    Assert-Equal $adoptedHistorical.outcome 'succeeded' 'exact historical blocked deployment is adopted'
+    Assert-Equal $adoptedHistorical.phase 'installed_closed' 'adoption records only the closed phase'
+    Assert-Equal $script:Fixture.installation_complete $true 'adoption writes the completion marker'
+    Assert-Equal ($script:Calls -contains 'endpoint:True') $false 'adoption never opens the endpoint'
+
+    Reset-Fixture
+    $script:Fixture.phase = 'blocked'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Fixture.linux_manager_install_started = $true
+    $script:Fixture.linux_manager_installed = $false
+    $script:CompleteInstallation = $false
+    $script:Running = @()
+    $ambiguousBlocked = Invoke-WslEgressOperation -Action Install -Execute
+    Assert-Equal $ambiguousBlocked.outcome 'blocked' 'unverified historical blocked deployment is not adopted'
+    Assert-Equal $ambiguousBlocked.phase 'blocked' 'ambiguous adoption preserves the blocked phase'
+    Assert-Equal (@($script:Calls | Where-Object { $_ -notin @('baseline', 'running-inventory', 'complete-installation-audit') }).Count -eq 0) $true 'ambiguous adoption performs no mutation'
+
+    Reset-Fixture
+    $script:Fixture.phase = 'blocked'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Fixture.linux_manager_install_started = $false
+    $script:Fixture.linux_manager_installed = $false
+    $script:CompleteInstallation = $true
+    $script:Running = @()
+    $adoptedMarkerless = Invoke-WslEgressOperation -Action Install -Execute
+    Assert-Equal $adoptedMarkerless.outcome 'succeeded' 'exact markerless blocked deployment is adopted'
+    Assert-Equal $adoptedMarkerless.phase 'installed_closed' 'markerless adoption records only the closed phase'
+    Assert-Equal $script:Fixture.installation_complete $true 'markerless adoption writes the completion marker'
+    Assert-Equal ($script:Calls -contains 'endpoint:True') $false 'markerless adoption never opens the endpoint'
+
+    Reset-Fixture
+    $script:Fixture.phase = 'blocked'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Fixture.linux_manager_install_started = $false
+    $script:Fixture.linux_manager_installed = $false
+    $script:CompleteInstallation = $false
+    $script:Running = @()
+    $ambiguousMarkerless = Invoke-WslEgressOperation -Action Install -Execute
+    Assert-Equal $ambiguousMarkerless.outcome 'blocked' 'unverified markerless blocked deployment is not adopted'
+    Assert-Equal $ambiguousMarkerless.phase 'blocked' 'ambiguous markerless adoption preserves the blocked phase'
+    Assert-Equal (@($script:Calls | Where-Object { $_ -notin @('baseline', 'running-inventory', 'complete-installation-audit') }).Count -eq 0) $true 'ambiguous markerless adoption performs no mutation'
+
+    $modulePath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../WslSecureEgress.psm1'))
+    $moduleText = Get-Content -LiteralPath $modulePath -Raw
+    $start = $moduleText.IndexOf('function Test-WslEgressCompleteInstallation', [StringComparison]::Ordinal)
+    $end = $moduleText.IndexOf("`nfunction ", $start + 1, [StringComparison]::Ordinal)
+    if ($start -lt 0 -or $end -lt 0) { throw 'Could not isolate the real complete-installation audit.' }
+    $completeInstallationSource = $moduleText.Substring($start, $end - $start)
+    $completeInstallationImplementation = [scriptblock]::Create(
+        "param(`$State, `$Distributions)`n$completeInstallationSource`n" +
+        "Test-WslEgressCompleteInstallation `$State `$Distributions")
+
+    $completeState = [ordered]@{
+        schema_version = 1; owner = 'ClashOfRust.WslEgress'; owner_sid = 'S-1-5-21-fixture'
+        generation = 41; backend = 'WireGuard'; manager_distro = 'Ubuntu'; phase = 'blocked'
+        endpoint_enabled = $false; distributions = @('Ubuntu', 'Debian'); distro_configs = @('Debian')
+        distro_config_pending = @(); linux_manager_installed = $true
+        endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; uid = 1000; gid = 1000
+    }
+    $completeDistributions = @(
+        [pscustomobject]@{ name = 'Ubuntu' },
+        [pscustomobject]@{ name = 'Debian' })
+    $script:AuditValid = $true
+    $script:AdoptionLinuxActions = New-Object 'Collections.Generic.List[string]'
+    function script:Invoke-WslEgressLinux {
+        param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
+        $script:AdoptionLinuxActions.Add($Action)
+        if ($Action -eq 'status') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'Guarded'; generation = 41; facts = @{} }
+        } elseif ($Action -eq 'audit-config') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'DistroConfigured'; generation = 41
+                facts = [pscustomobject]@{ owned_config_matches = $true; interop_runtime_disabled = $true } }
+        } else { throw 'Unexpected Linux action.' }
+    }
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $true 'same-generation complete blocked installation is adoptable'
+    Assert-Equal ($script:AdoptionLinuxActions -join ',') 'status,audit-config,audit-config' 'adoption audits the manager and configured distro'
+    $completeState.generation = 40
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'generation mismatch prevents adoption'
+    $completeState.generation = 41
+    $completeState.distro_config_pending = @($null)
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $true 'legacy null pending entry does not block adoption'
+    $completeState.linux_manager_installed = $true
+    function script:Invoke-WslEgressLinux {
+        param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
+        if ($Action -eq 'status') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'Running'; generation = 41; facts = @{} }
+        } else { throw 'Unexpected Linux action.' }
+    }
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'manager not in the closed guarded phase prevents adoption'
+    function script:Invoke-WslEgressLinux {
+        param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
+        if ($Action -eq 'status') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'Guarded'; generation = 41; facts = @{} }
+        } elseif ($Action -eq 'audit-config') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'DistroConfigured'; generation = 41
+                facts = [pscustomobject]@{ owned_config_matches = $true; interop_runtime_disabled = $false } }
+        } else { throw 'Unexpected Linux action.' }
+    }
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'enabled interop prevents adoption'
+    function script:Invoke-WslEgressLinux {
+        param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
+        if ($Action -eq 'status') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'Guarded'; generation = 41; facts = @{} }
+        } elseif ($Action -eq 'audit-config') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'DistroConfigured'; generation = 41
+                facts = [pscustomobject]@{ owned_config_matches = $true; interop_runtime_disabled = $true } }
+        } else { throw 'Unexpected Linux action.' }
+    }
+    $completeState.distro_config_pending = @('Debian')
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'pending distro configuration prevents adoption'
+    $completeState.distro_config_pending = @()
+    $completeState.endpoint_enabled = $true
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'enabled endpoint prevents adoption'
+    $completeState.endpoint_enabled = $false
+    $completeState.distro_config_pending = @()
+    $script:AuditValid = $false
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'invalid host guard prevents adoption'
+    $script:AuditValid = $true
+    Assert-Equal (& $completeInstallationImplementation $completeState @([pscustomobject]@{ name = 'Ubuntu' })) $false 'distribution inventory mismatch prevents adoption'
+    $completeState.distro_configs = @()
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'missing distro configuration ownership prevents adoption'
+    $completeState.distro_configs = @('Debian')
+    function script:Invoke-WslEgressLinux {
+        param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
+        if ($Action -eq 'status') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'Guarded'; generation = 41; facts = @{} }
+        } elseif ($Action -eq 'audit-config') {
+            [ordered]@{ outcome = 'succeeded'; phase = 'DistroConfigured'; generation = 41
+                facts = [pscustomobject]@{
+                    owned_config_matches = $Distribution -ne 'Ubuntu'
+                    interop_runtime_disabled = $true } }
+        } else { throw 'Unexpected Linux action.' }
+    }
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'manager configuration drift prevents adoption'
+
+    foreach ($failedPhase in @('failed_closed_requested', 'closure_unverified')) {
+        Reset-Fixture
+        $script:Fixture.phase = $failedPhase
+        $script:Fixture.endpoint_enabled = $false
+        $script:Fixture.linux_manager_install_started = $false
+        $script:Fixture.linux_manager_installed = $false
+        $script:Running = @()
+        $partialRecovered = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\egress.json'
+        Assert-Equal $partialRecovered.outcome 'failed' "$failedPhase Install reaches the profile gate after Windows-only recovery"
+        Assert-Equal $script:Fixture.phase $failedPhase "$failedPhase Install preserves closed recovery state when profile validation fails"
+        Assert-Equal ($script:Calls -contains 'archive-restored') $false "$failedPhase Install validates before restoring the journal"
+        Assert-Equal ($script:Calls -contains 'restore-hyperv') $false "$failedPhase Install validates before restoring host settings"
+    }
+
+    Reset-Fixture
+    $script:Fixture.phase = 'failed_closed_requested'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Fixture.settings_write_started = $true
+    $script:Fixture.settings_written = $true
+    $script:Fixture.linux_manager_install_started = $false
+    $script:Fixture.linux_manager_installed = $false
+    $script:Fixture.before_persistent_settings = [ordered]@{
+        Enabled = 'False'; DefaultInboundAction = 'Allow'; DefaultOutboundAction = 'Allow'
+        AllowHostPolicyMerge = 'True'; LoopbackEnabled = 'True' }
+    $script:Running = @()
+    $script:preservedDuringReinstall = $false
+    function script:Restore-WslEgressPartialInstall {
+        param($State, [switch]$PreserveGuard)
+        $script:Calls.Add('partial-cleanup')
+        Assert-Equal $PreserveGuard.IsPresent $true 'reinstall preserves the current host guard'
+        Assert-Equal $script:AuditValid $true 'reinstall cleanup runs under a closed guard'
+        $State.phase = 'prepared_for_reinstall'
+        $script:preservedDuringReinstall = $true
+    }
+    function script:Read-WslEgressProfile {
+        [pscustomobject]@{ schema = 1; backend = 'WireGuard'; manager_distro = 'Ubuntu'
+            endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; uid = 1000; gid = 1000 }
+    }
+    function script:Get-WslEgressDockerPaths { throw 'fixture stops after guarded cleanup' }
+    $preservedRecovery = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\egress.json'
+    Assert-Equal $preservedRecovery.outcome 'failed' 'post-cleanup validation failure is reported'
+    Assert-Equal $script:Fixture.phase 'prepared_for_reinstall' 'partial cleanup records reinstall preparation'
+    Assert-Equal $script:preservedDuringReinstall $true 'reinstall cleanup completed before the later failure'
+    Assert-Equal ($script:Calls -contains 'partial-cleanup') $true 'reinstall cleanup requested guard preservation'
+    Assert-Equal ($script:Calls -contains 'restore-hyperv') $false 'reinstall never releases host deny during cleanup'
+    $partialCleanupImplementation = (Get-Command Restore-WslEgressPartialInstall).ScriptBlock
+    Set-Item -LiteralPath Function:script:Restore-WslEgressPartialInstall -Value {
+        param($State, [switch]$PreserveGuard)
+        if ($PreserveGuard.IsPresent) {
+            $script:Calls.Add('partial-cleanup')
+            $State.phase = 'prepared_for_reinstall'
+        } else {
+            $script:Calls.Add('partial-full-restore')
+            if ($State.settings_write_started) { $script:Calls.Add('restore-hyperv') }
+            if ($State.docker_guard_written) { $script:Calls.Add('docker:True') }
+            if ($State.guardian_service_installed) { $script:Calls.Add('remove-guardian') }
+            if ($State.Contains('wslconfig')) { $script:Calls.Add('restore-wslconfig') }
+            $State.phase = 'restored'
+        }
+    }
+    function script:Get-WslEgressDockerPaths { @() }
+
+    Reset-Fixture
+    $script:Fixture.phase = 'restored'
+    $script:Fixture.before_persistent_settings = [ordered]@{
+        Enabled = 'False'; DefaultInboundAction = 'Allow'; DefaultOutboundAction = 'Allow'
+        AllowHostPolicyMerge = 'True'; LoopbackEnabled = 'True' }
+    $script:Archived = $null
+    $script:Writes.Clear()
+    $script:Running = @()
+    $distributionFixtureImplementation = (Get-Command Get-WslEgressDistributions).ScriptBlock
+    function script:Get-WslEgressDistributions {
+        @(
+            [pscustomobject]@{ name = 'Ubuntu'; state = 'unknown'; coverage = 'unknown' },
+            [pscustomobject]@{ name = 'Debian'; state = 'unknown'; coverage = 'unknown' },
+            [pscustomobject]@{ name = 'Fedora'; state = 'unknown'; coverage = 'unknown' },
+            [pscustomobject]@{ name = 'Arch'; state = 'unknown'; coverage = 'unknown' })
+    }
+    function script:Read-WslEgressProfile {
+        [pscustomobject]@{ schema = 1; backend = 'WireGuard'; manager_distro = 'Ubuntu'
+            endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; uid = 1000; gid = 1000 }
+    }
+    function script:Get-WslEgressDockerPaths { @() }
+    function script:Set-WslEgressPersistentGuard {
+        param($State)
+        $State.settings_written = $true
+        $script:Calls.Add('install-hyperv')
+    }
+    function script:Install-WslEgressGuardian {
+        param($State)
+        $script:Calls.Add('install-guardian')
+    }
+    function script:Install-WslEgressConfig {
+        param($State)
+        $State.wslconfig = [ordered]@{ existed = $false; before_hash = $null; after_hash = 'after' }
+        $script:Calls.Add('install-wslconfig')
+    }
+    function script:Install-WslEgressPayload {
+        param($State, $Distro)
+        $script:Calls.Add('install-payload:' + $Distro)
+    }
+    function script:Stop-WslEgressDistribution {
+        param([string]$Name)
+        $script:Calls.Add('stop-distro:' + $Name)
+    }
+    function script:Invoke-WslEgressProcess {
+        param($Arguments, $InputText, $TimeoutSeconds)
+        $script:Calls.Add('process:' + ($Arguments -join ','))
+        [pscustomobject]@{ ExitCode = 0; Output = ''; Error = '' }
+    }
+    function script:Complete-WslEgressGenerationCutover { $script:Calls.Add('complete-generation-cutover') }
+    function script:Invoke-WslEgressLinux {
+        param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
+        $script:Calls.Add('linux:' + $Action + ':' + $Distribution)
+        [ordered]@{ outcome = 'succeeded'; phase = 'Guarded'; checks = @() }
+    }
+    $script:Fixture.operation_id = 'fixture-operation'
+    $reinstalled = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\egress.json'
+    Assert-Equal ($script:Calls -contains 'archive-restored') $true 'fresh Install archives the verified restored journal'
+    Assert-Equal ($script:Archived.generation) 41 'archive retains the retired Windows generation'
+    Assert-Equal $script:RetainedLiveState $true 'reinstall retains the old live journal until the new atomic save'
+    Assert-Equal $reinstalled.outcome 'succeeded' "restored journal permits a fresh install transaction ($($reinstalled.message); phase=$($reinstalled.phase); checks=$($reinstalled.checks | ConvertTo-Json -Compress))"
+    Assert-Equal $reinstalled.phase 'installed_closed' 'fresh install completes in a closed state'
+    Assert-Equal ($script:Calls -contains 'install-hyperv') $true 'fresh install recreates the host guard'
+    Assert-Equal ($script:Calls -contains 'complete-generation-cutover') $true 'fresh install retires generation sidecars only after writing its new state'
+    foreach ($name in @('Ubuntu', 'Debian', 'Fedora', 'Arch')) {
+        Assert-Equal @($script:Calls | Where-Object { $_ -eq ('install-payload:' + $name) }).Count 1 "fresh install stages exactly one payload for $name"
+    }
+    foreach ($name in @('Debian', 'Fedora', 'Arch')) {
+        Assert-Equal @($script:Calls | Where-Object { $_ -eq ('linux:configure:' + $name) }).Count 1 "fresh install configures exactly once: $name"
+    }
+    Assert-Equal @($script:Calls | Where-Object { $_ -eq 'linux:configure:Ubuntu' }).Count 0 'manager is not configured as a sibling'
+    foreach ($name in @('Ubuntu', 'Debian', 'Fedora', 'Arch')) {
+        Assert-Equal @($script:Calls | Where-Object { $_ -eq ('stop-distro:' + $name) }).Count 1 "fresh install stops exactly once: $name"
+    }
+    Assert-Equal @($script:Calls | Where-Object { $_ -eq 'linux:audit-config:' }).Count 1 'fresh install audits the manager exactly once'
+    foreach ($name in @('Debian', 'Fedora', 'Arch')) {
+        Assert-Equal @($script:Calls | Where-Object { $_ -eq ('linux:audit-config:' + $name) }).Count 1 "fresh install audits exactly once: $name"
+    }
+    Assert-Equal @($script:Calls | Where-Object { $_ -eq 'process:--shutdown' }).Count 1 'fresh install performs one shared WSL restart'
+    Set-Item -LiteralPath Function:script:Get-WslEgressDistributions -Value $distributionFixtureImplementation
 
     Reset-Fixture
     $stopped = Invoke-WslEgressOperation -Action Stop -Execute
     Assert-Equal $stopped.outcome 'succeeded' 'Stop completes with an installed deployment'
     Assert-Equal $script:Fixture.endpoint_enabled $false 'Stop leaves the persistent endpoint closed'
     Assert-Equal ($script:Calls -contains 'remove-renewal-task') $true 'Stop removes only its owned renewal task'
-    Assert-Equal ($script:Calls -contains 'linux:stop') $true 'Stop asks the running Linux manager to stop'
+    Assert-Equal @($script:Calls | Where-Object { $_ -eq 'linux:stop:' }).Count 1 'Stop asks the running Linux manager to stop exactly once'
 
     foreach ($stage in @(
         @{ Name = 'hyperv'; Settings = $true },
@@ -261,6 +554,10 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
             endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; uid = 1000; gid = 1000 }
     }
     function script:Get-WslEgressDockerPaths { @() }
+    function script:Read-WslEgressProfile {
+        [pscustomobject]@{ schema = 1; backend = 'WireGuard'; manager_distro = 'Ubuntu'
+            endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; uid = 1000; gid = 1000 }
+    }
     function script:Set-WslEgressPersistentGuard {
         param($State)
         $State.settings_written = $true
@@ -345,6 +642,41 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         param($Arguments, $InputText, $TimeoutSeconds)
         [pscustomobject]@{ ExitCode = $(if ($script:DistroFailure -eq 'shutdown') { 1 } else { 0 }); Output = ''; Error = '' }
     }
+    Reset-Fixture
+    $script:Fixture.phase = 'preparing'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Fixture.linux_manager_install_started = $false
+    $script:Fixture.linux_manager_installed = $false
+    $script:Fixture.before_persistent_settings = [ordered]@{
+        Enabled = 'False'; DefaultInboundAction = 'Allow'; DefaultOutboundAction = 'Allow'
+        AllowHostPolicyMerge = 'True'; LoopbackEnabled = 'True' }
+    $script:Running = @()
+    $script:DistroFailure = 'configure'
+    $script:AuditValidBeforeReinstallFailure = $true
+    $script:preservedDuringReinstall = $false
+    # Restore the persistent default-deny guard used by this Install fixture.
+    # The previous partial-recovery test intentionally replaced it.
+    function script:Set-WslEgressPersistentGuard {
+        param($State)
+        $State.settings_written = $true
+        $script:Calls.Add('install-hyperv')
+    }
+    function script:Restore-WslEgressPartialInstall {
+        param($State, [switch]$PreserveGuard)
+        $script:Calls.Add('partial-cleanup')
+        $State.phase = 'prepared_for_reinstall'
+    }
+    $distroConfigurationImplementation = (Get-Command Invoke-WslEgressDistroConfiguration).ScriptBlock
+    function script:Invoke-WslEgressDistroConfiguration {
+        param($State, $Profile, $Distributions)
+        $script:Calls.Add('distro-configuration')
+        throw 'fixture distro configuration failure'
+    }
+    $distroInstallFailure = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\egress.json'
+    Assert-Equal $distroInstallFailure.outcome 'failed' 'distro configuration failure is reported'
+    Assert-Equal $script:Fixture.linux_manager_installed $false 'manager completion marker is not set before distro configuration'
+    Assert-Equal ([bool](Get-WslEgressStateValue $script:Fixture 'installation_complete' $false)) $false 'installation completion marker is not set before distro configuration'
+    Set-Item -LiteralPath Function:script:Invoke-WslEgressDistroConfiguration -Value $distroConfigurationImplementation
     foreach ($failure in @('configure', 'terminate', 'shutdown')) {
         Reset-Fixture
         $script:DistroFailure = $failure
