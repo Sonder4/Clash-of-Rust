@@ -7,10 +7,9 @@ This snapshot was checked on 2026-10-18:
 - Upstream: `Fu021/Clash-of-Rust`, main
   `37683750b37be9d2bbcfb22804bec96174e14af5`.
 - Fork: `Sonder4/Clash-of-Rust`, branch `feat/wsl-secure-egress`, PR #2.
-- Current committed feature HEAD:
-  `ad27eff322b07eb7e0dec6ec20c59639b209ba72` plus the PR-repair worktree changes described here.
-- Most recent upstream ancestor included in HEAD:
-  `a27d1540e81def416c22936f87f7e008d3e8b3b7`.
+- Repair commit: `95412ef4926935f7a2b8b82876b1ebe9114572fd`.
+- Upstream synchronization merge:
+  `7bd42e949983094e7ab72f48e4aae247c7e4be4b`.
 - The fork's main ref is `e2fb6f1`; it is an older comparison base than
   refreshed upstream main.
 
@@ -39,12 +38,11 @@ release manifest.
 
 ## Upstream synchronization status
 
-Merge `1eed8b3` incorporates `a27d154`. Upstream subsequently added
-`3768375`, “docs: add contributor guidelines and AI contribution policy”.
-That commit changes `.github/CONTRIBUTING.md`, `README.md` and
-`docs/workflows.md`; it has been fetched but is not yet merged at this
-snapshot. Differences showing those new upstream paragraphs missing are
-synchronization differences, not an intended feature deletion.
+Merge `7bd42e9` incorporates current upstream main `3768375`, “docs: add
+contributor guidelines and AI contribution policy”. The merge adds
+`.github/CONTRIBUTING.md`, `README.md` and `docs/workflows.md` without changing
+the WSL repair commit. The branch is synchronized with the fetched upstream
+main at this snapshot.
 
 There is no upstream code update after `a27d154` in the currently fetched
 history. Refresh and integrate the documentation update before declaring the
