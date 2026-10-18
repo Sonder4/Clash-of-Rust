@@ -768,6 +768,49 @@ def shared_manager_runtime_matches(policy, uplink):
         return False
 
 
+def shared_root_runtime_matches(policy, uplink):
+    """Validate the shared root path without opening a sibling's netns files.
+
+    WSL distributions share the root network namespace, but each distro has
+    its own /run/netns mount. A sibling boot hook therefore cannot inspect the
+    manager's private transport and gateway namespace bind mounts. The exact
+    root guard, veths, policy route, and endpoint route still provide a safe
+    read-only proof that the shared runtime is present; the manager remains
+    responsible for the private namespace checks.
+    """
+    try:
+        if not valid_uplink_interface(uplink):
+            return False
+        route = json_command(
+            ['ip', '-4', '-j', 'route', 'get', policy['endpoint_ipv4'],
+             'from', TRANSPORT_IP, 'iif', ROOT_IF])
+        if len(route) != 1 or route[0].get('dev') != uplink:
+            return False
+        links = json_command(['ip', '-j', 'link', 'show'])
+        if any(not any(link.get('ifname') == iface and
+                       'UP' in link.get('flags', [])
+                       for link in links)
+               for iface in (ROOT_IF, BUS_IF)):
+            return False
+        routes = json_command(['ip', '-4', '-N', '-j', 'route',
+                               'show', 'table', str(ROUTE_TABLE)])
+        if not any(route.get('dev') == BUS_IF and
+                   route.get('gateway') == BUS_GW_IP and
+                   route.get('dst', 'default') == 'default'
+                   for route in routes):
+            return False
+        if not any(route.get('dst') == 'default' and
+                   route.get('type') == 'unreachable'
+                   for route in routes):
+            return False
+        rules = json_command(['ip', '-4', '-j', 'rule', 'show'])
+        return any(rule.get('priority') == PREF_DEFAULT_DENY and
+                   str(rule.get('table')) == str(ROUTE_TABLE)
+                   for rule in rules)
+    except (Blocked, IndexError, KeyError, TypeError, ValueError, OSError):
+        return False
+
+
 def shared_manager_table_matches(state, items):
     """Verify a sibling manager's exact safe policy without its private files.
 
@@ -839,7 +882,7 @@ def shared_manager_table_matches(state, items):
         runtime = {'uplink': uplink, 'root_sources': [str(network) for network in networks],
                    'forward_sources': sources}
         return (manager_table_matches(owner, opened=True, state=runtime, profile=policy) and
-                shared_manager_runtime_matches(policy, uplink))
+                shared_root_runtime_matches(policy, uplink))
     except (IndexError, KeyError, TypeError, ValueError):
         return False
 
@@ -1662,6 +1705,8 @@ class Manager:
 
     def start(self):
         self.load()
+        if list_table(BOOT_EMERGENCY) is not None:
+            raise Blocked('Existing boot emergency table preserved; explicit recovery is required.')
         self.assert_table()
         if self.p['backend'] == 'tailscale':
             raise Blocked('Tailscale full-WSL cold-start boundary is unproven; backend blocked.')
@@ -1773,6 +1818,14 @@ class Manager:
             desired = [(None, name, key, value) for name in root_ifaces for key, value in [('forwarding', '1'), ('rp_filter', '2')]]
             desired += [(GW, name, 'forwarding', '1') for name in (GW_BUS_IF, 'wg0')]
             self.s.setdefault('sysctls', [])
+            global_path = '/proc/sys/net/ipv4/ip_forward'
+            before = command(['cat', global_path], ns=GW).stdout.decode().strip()
+            self.s['sysctls'].append({
+                'namespace': GW, 'path': global_path, 'before': before,
+                'written': '1', 'scope': 'namespace',
+            })
+            self.save()
+            command(['tee', global_path], ns=GW, data=b'1\n')
             for ns, iface, key, value in desired:
                 path = '/proc/sys/net/ipv4/conf/' + iface + '/' + key
                 before = command(['cat', path], ns=ns).stdout.decode().strip()
@@ -1786,12 +1839,15 @@ class Manager:
             records = self.s.get('sysctls', [])
             restorable = []
             for rec in records:
-                links = json_command(['ip', '-j', 'link', 'show'], ns=rec['namespace'])
-                same = any(x['ifname'] == rec['interface'] and x['ifindex'] == rec['ifindex'] for x in links)
-                if not same:
-                    # The original interface is gone. Never restore settings to
-                    # a replacement interface merely reusing the same name.
-                    continue
+                if rec.get('scope') == 'namespace':
+                    same = True
+                else:
+                    links = json_command(['ip', '-j', 'link', 'show'], ns=rec['namespace'])
+                    same = any(x['ifname'] == rec['interface'] and x['ifindex'] == rec['ifindex'] for x in links)
+                    if not same:
+                        # The original interface is gone. Never restore settings to
+                        # a replacement interface merely reusing the same name.
+                        continue
                 current = command(['cat', rec['path']], ns=rec['namespace'], okay=True)
                 if current.returncode or current.stdout.decode().strip() != rec['written']:
                     raise Blocked('Owned interface sysctl drift; external settings preserved.')
@@ -1881,6 +1937,14 @@ class Manager:
                 return self.event(
                     'guard', 'Blocked',
                     'Unknown shared guard preserved; independent boot emergency deny installed.')
+            # A sibling distro has its own private journal, but it shares the
+            # WSL VM network namespace with the manager. Refresh the runtime
+            # identity after every boot so the next Start is not rejected as
+            # stale solely because this distro was launched after a restart.
+            self.s['root_namespace'] = os.readlink('/proc/self/ns/net')
+            self.s['boot_id'] = boot_id()
+            self.s['phase'] = 'DistroConfigured'
+            self.save()
             return self.event(
                 'guard',
                 'Succeeded',
