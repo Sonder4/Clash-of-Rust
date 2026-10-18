@@ -28,6 +28,7 @@ if (-not $Execute) {
 }
 $module = Import-Module (Join-Path $PSScriptRoot 'WslSecureEgress.psm1') -Force -PassThru -DisableNameChecking
 try {
+    $script:WslEgressPayloadUpdateStage = 'preflight'
     $result = & $module {
         param($RequestedDistro)
         if (-not (Test-WslEgressAdministrator)) {
@@ -37,8 +38,8 @@ try {
         $state = Read-WslEgressState
         if (-not $state) { throw 'Not installed.' }
         if ($state.owner_sid -ne $sid) { throw 'State belongs to a different Windows user.' }
-        if ($state.phase -ne 'installed_closed') {
-            throw 'Run the Stop action first; the reviewed payload upgrade requires the closed phase.'
+        if ($state.phase -notin @('installed_closed','failed_closed_requested')) {
+            throw 'Run the Stop action first; the reviewed payload upgrade requires a verified closed phase.'
         }
         if (-not (Get-WslEgressClosureAudit $state).confirmed) {
             throw 'Endpoint closure is not confirmed; payload upgrade refused.'
@@ -49,13 +50,28 @@ try {
         }
         $running = @(Get-WslEgressRunningDistributions)
         if ($running -notcontains $distro) {
-            throw 'Start the manager distribution before the reviewed payload upgrade.'
+            # Starting this installed distro executes only its fixed boot guard.
+            # The Windows endpoint is already verified closed, so this cannot
+            # create a fallback egress path.
+            $started = Invoke-WslEgressProcess -Arguments @(
+                '--distribution',$distro,'--user','root','--exec',
+                '/usr/bin/true') -TimeoutSeconds 45
+            if ($started.ExitCode -ne 0) {
+                throw 'The manager distribution did not start for the reviewed payload upgrade.'
+            }
+            $running = @(Get-WslEgressRunningDistributions)
+            if ($running -notcontains $distro) {
+                throw 'Start the manager distribution before the reviewed payload upgrade.'
+            }
         }
+        $script:WslEgressPayloadUpdateStage = 'payload_stage'
         Install-WslEgressPayload $state $distro -ReviewedUpgrade
+        $script:WslEgressPayloadUpdateStage = 'manager_repair'
         $repair = Invoke-WslEgressLinux $state 'repair-config'
         if ($repair.outcome -ne 'succeeded') {
             throw 'Manager repair-config did not succeed after the payload upgrade.'
         }
+        $script:WslEgressPayloadUpdateStage = 'configuration_audit'
         $audit = Invoke-WslEgressLinux $state 'audit-config'
         if ($audit.outcome -ne 'succeeded' -or
             -not $audit.facts.owned_config_matches -or
@@ -84,10 +100,17 @@ try {
     } $Distro
     $result | ConvertTo-Json -Depth 8 -Compress
 } catch {
+    $failureStage = if ($script:WslEgressPayloadUpdateStage) {
+        [string]$script:WslEgressPayloadUpdateStage
+    } else { 'preflight' }
     [ordered]@{
         schema_version = 1
         action = 'update-live-payload'
         outcome = 'failed'
+        stage = $failureStage
+        error_type = $_.Exception.GetType().FullName
+        error_id = [string]$_.FullyQualifiedErrorId
+        line = [int]$_.InvocationInfo.ScriptLineNumber
         message = 'Payload upgrade failed; endpoint remains closed and the journal is retained for review.'
     } | ConvertTo-Json -Compress
     exit 1

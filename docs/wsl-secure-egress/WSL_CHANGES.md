@@ -71,12 +71,28 @@ this repair pass did not deploy or restart any real VPS service.
 
 ## Latest verification boundary
 
-On 2026-10-18 the expanded Linux static suite passed 52 tests. A fresh
-Linux-native source copy also passed 89 isolated integration cases, including
-kernel loading of closed and open guards with one and multiple business
-sources. This uses disposable namespaces and a fixture receiver; it does not
-test the actual German VPS. Earlier results remain in
-[TEST_STATUS.md](TEST_STATUS.md), tied to their own revision and scope. The production journal is currently
-`installed_closed`, with the endpoint disabled. The new source payload has not
-been installed on this host; neither production cold boot nor current Claude
-Desktop/CLI usability is claimed complete.
+On 2026-10-18 the expanded Linux static suite passed 73 tests with two
+platform skips. A fresh Linux-native source copy also passed 89 isolated
+integration cases, including kernel loading of closed and open guards with one
+and multiple business sources. This uses disposable namespaces and a fixture
+receiver; it does not test the actual German VPS.
+
+The synchronized installed payload was exercised on Ubuntu-22.04 with a
+controlled Stop→Start transaction. Stop returned `succeeded/Guarded`; the
+first subsequent Start returned `succeeded/Running` and recreated both owned
+namespaces. Three independent IPv4 probes from the isolated launcher returned
+the German VPS address `62.84.164.122`. The isolated view contained only
+`lo`, `cor-bg0` and `wg0`, used `nameserver 10.77.0.1`, and had an unreachable
+IPv6 default route. OpenAI, Anthropic and DeepSeek unauthenticated endpoint
+probes returned 401, 405 and 401 respectively, proving reachability but not
+authentication or inference.
+
+The Claude Code CLI (`2.1.302`) ran inside the isolated launcher without proxy
+environment variables. Claude Desktop remains a separate compatibility issue:
+its old Windows/desktop proxy configuration is not part of this Linux data
+plane, and the Ubuntu-22.04 native binding requires GLIBC 2.39 while the
+distro provides 2.35. Do not replace system glibc; use a compatible distro for
+the desktop package. Earlier results remain in [TEST_STATUS.md](TEST_STATUS.md),
+tied to their own revision and scope. Cold boot, reboot, physical network
+switch, sleep/resume and independent geographic corroboration remain separate
+tests.

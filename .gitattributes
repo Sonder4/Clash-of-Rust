@@ -8,6 +8,8 @@
 *.md text eol=lf
 *.py text eol=lf
 *.nsi text eol=lf
+scripts/wsl-secure-egress/linux/* text eol=lf
+scripts/wsl-secure-egress/server/*.service text eol=lf
 *.png binary
 *.ico binary
 *.rgba binary

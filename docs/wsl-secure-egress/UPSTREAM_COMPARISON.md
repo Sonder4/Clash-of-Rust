@@ -6,12 +6,13 @@ This snapshot was checked on 2026-10-18:
 
 - Upstream: `Fu021/Clash-of-Rust`, main
   `37683750b37be9d2bbcfb22804bec96174e14af5`.
-- Fork: `Sonder4/Clash-of-Rust`, branch `feat/wsl-secure-egress`, PR #2.
-- Repair commit: `95412ef4926935f7a2b8b82876b1ebe9114572fd`.
-- Upstream synchronization merge:
-  `7bd42e949983094e7ab72f48e4aae247c7e4be4b`.
-- The fork's main ref is `e2fb6f1`; it is an older comparison base than
-  refreshed upstream main.
+- Fork: `Sonder4/Clash-of-Rust`, branch `fix/wsl-recovery-review-20261018`.
+- Local fork worktree head: `50390d3a911ea15259147a903f243a99dc7ba5d6`.
+- `git rev-list --left-right --count upstream/main...HEAD` is `0 39`:
+  the fork head contains all fetched upstream commits and has 39 fork-only
+  commits. No upstream merge is required before this repair.
+- Delivery target is the user's fork only; `Fu021/Clash-of-Rust` is not a PR
+  target.
 
 The comparison below separates the existing feature branch from the five review repairs; the repair commit and merge result are filled from Git before delivery. The task's early local handoff recorded the official `v0.5.9` checkout,
 `f8a1379`, before WSL implementation. That historical release explains the
@@ -38,15 +39,11 @@ release manifest.
 
 ## Upstream synchronization status
 
-Merge `7bd42e9` incorporates current upstream main `3768375`, “docs: add
-contributor guidelines and AI contribution policy”. The merge adds
-`.github/CONTRIBUTING.md`, `README.md` and `docs/workflows.md` without changing
-the WSL repair commit. The branch is synchronized with the fetched upstream
-main at this snapshot.
-
-There is no upstream code update after `a27d154` in the currently fetched
-history. Refresh and integrate the documentation update before declaring the
-branch synchronized. Delivery remains the user's fork PR #2; no PR to
+The fetched upstream tip is `3768375` (“docs: add contributor guidelines and AI
+contribution policy”). Its contributor-documentation and workflow-policy
+changes are already ancestors of the fork head. The remaining fork-only
+changes are the WSL backend, controller/resource packaging, tests and repair
+documentation. Delivery remains the user's fork PR; no PR to
 `Fu021/Clash-of-Rust` is requested.
 
 ## Functional change boundary

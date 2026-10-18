@@ -315,6 +315,14 @@ fn explicit_execution_and_preflight_have_separate_arguments() {
 fn reconnect_uses_only_installed_state_and_install_requires_a_private_profile() {
     let request = Request::installed(Action::Start, Backend::WireGuard, true);
     assert_eq!(request.arguments(), Err(Error::MissingProfile));
+    let mut endpoint_only_start = Request::installed(Action::Start, Backend::WireGuard, true);
+    endpoint_only_start.endpoint_ipv4 = "203.0.113.9".into();
+    endpoint_only_start.endpoint_port = "51820".into();
+    assert_eq!(
+        endpoint_only_start.arguments(),
+        Err(Error::MissingProfile),
+        "endpoint fields cannot substitute for the required profile"
+    );
     let mut install = Request::installed(Action::Install, Backend::WireGuard, true);
     assert_eq!(install.validate(), Err(Error::MissingProfile));
     install.endpoint_ipv4 = "203.0.113.9".into();

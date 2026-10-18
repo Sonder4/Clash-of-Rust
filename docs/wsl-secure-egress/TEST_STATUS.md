@@ -120,6 +120,61 @@ An earlier run at 02:13:02 is retained as FAIL: the ordinary path passed, but
 the isolated launcher correctly refused a stale Windows attestation and the
 aggregate result was failed. It was not silently replaced.
 
+## 2026-10-18 PR repair and current host retest (18:30 Asia/Taipei)
+
+This section supersedes the older connected-state description above for the
+current host state. The historical 02:15 live acceptance remains evidence only
+for that earlier transaction and is not evidence that the tunnel is currently
+connected.
+
+- Windows `.wslconfig` was read as `networkingMode=nat`,
+  `dnsTunneling=false`, `autoProxy=false`, `firewall=true`, and
+  `localhostForwarding=false`.
+- The current protected Windows journal was read through the administrator
+  broker with secrets omitted. It began this retest at `installed_closed`, with
+  endpoint disabled. The read-only Status action reported host policy PASS and
+  WSL runtime FAIL.
+- Initial WSL readback found ordinary NAT `eth0`, no `cor-eb0`, no named
+  network namespaces and no WireGuard handshake. Manager Status first rejected
+  a missing generation argument; with the journaled generation it reported
+  `Guarded`. Claude's retry service was stopped after a root-only backup of its
+  unit to `/var/backups/clash-wsl-repair-20261018/`.
+- A Windows administrator hot update installed the reviewed helper and Linux
+  payload after backing up the previous helper under
+  `ClashOfRust-network-backups/review-repair-20261018/`. The live payload update
+  returned `succeeded`, `phase=installed_closed`,
+  `owned_config_matches=true`, `interop_runtime_disabled=true`, and
+  `endpoint_enabled=false`. The WSL NAT network mode was not changed.
+- A subsequent real `Start -Execute` passed the all-distro, Hyper-V, DNS,
+  interop and Docker coverage scope audits. Linux start and endpoint enable
+  proceeded, but registering the required fixed interactive scope-renewal task
+  failed with a Windows `CimException`. The transaction's compensation closed
+  the endpoint and returned `failed_closed_requested`; the operation is a
+  **FAIL**, not a connected acceptance. No Claude or model-vendor request was
+  made. Task Scheduler failure diagnosis remains unresolved.
+- Windows baseline checks to `ipgw.neu.edu.cn` and `api.okinto.com` returned
+  HTTP 200 with certificate validation at 18:18:24 and 18:18:25 +08:00.
+  These are Windows-only checks; WSL has no NEU/domestic routing exception.
+- Windows offline suites passed: `windows-unit` 149 assertions,
+  `windows-workflow` 161, `elevation-unit` 21, and `package-upgrade-unit` 53.
+  Their raw output is in the ignored repair backup directory.
+- Real WSL offline suites passed: Linux static 66 (64 pass, two platform
+  skips), payload 32, server 24, provision 26, and acceptance harness 3; total
+  151 passed, no failures. A disposable in-kernel namespace test passed all
+  89 cases with no skips. These fixtures do not prove production Hyper-V,
+  actual VPS egress, or vendor reachability.
+- Claude Desktop remains blocked from testing. Its saved user unit and launched
+  process had a dead `127.0.0.1:12345` proxy, explaining the screenshot's
+  `ERR_PROXY_CONNECTION_FAILED`. A root-only backup exists and its service is
+  stopped. Separately, the installed native binding requests GLIBC 2.39
+  symbols `pidfd_spawnp` and `pidfd_getpid`, while Ubuntu 22.04 provides glibc
+  2.35. Do not replace system glibc. The package/runtime compatibility issue
+  is independent of the proxy outage.
+- No WSL public IP, private endpoint, SSH key, WireGuard key, or model-vendor
+  connection was placed in the repository. The detailed local audit and raw
+  machine reports are under the ignored
+  `ClashOfRust-network-backups/review-repair-20261018/` directory.
+
 ### Hosts isolation upgrade, fail-closed and recovery
 
 The user explicitly authorized administrator elevation. The upgrade was then
@@ -392,6 +447,65 @@ fault injection is not authorized.
 Update this document after GitHub Actions and any approved VPS/WSL acceptance
 with the exact commit, run URL and per-scenario result.
 
+## 2026-10-18 current installed-payload retest
+
+This section records the resumed local retest after the protected helper
+payloads were synchronized to both Program Files package locations. It
+supersedes earlier entries that described the endpoint as disabled before the
+UAC-approved recovery.
+
+| Check | Result | Actual evidence |
+| --- | --- | --- |
+| Upstream synchronization | PASS | `upstream/main=37683750b37be9d2bbcfb22804bec96174e14af5`; fork HEAD is 39 commits ahead and 0 behind |
+| Stop transaction | PASS | Linux manager returned `succeeded`, phase `Guarded`; owned namespaces and policy routes were removed |
+| First Start after Stop | PASS | Linux manager returned `succeeded`, phase `Running`; both `cor-egress-transport` and `cor-egress-gw` were recreated |
+| Isolated IPv4 exit | PASS | `api.ipify.org` and `ifconfig.me/ip` both returned `62.84.164.122` |
+| Isolated network view | PASS | only `lo`, `cor-bg0`, `wg0`; default IPv4 route is `wg0`; DNS is `10.77.0.1`; IPv6 default is unreachable |
+| OpenAI endpoint | PASS | HTTPS/TLS reached `api.openai.com`; HTTP 401 for missing bearer authentication |
+| Anthropic endpoint | PASS | HTTPS/TLS reached `api.anthropic.com`; HTTP 405 for a GET request |
+| DeepSeek endpoint | PASS | HTTPS/TLS reached `api.deepseek.com`; HTTP 401 for missing authentication |
+| Claude Code CLI | PASS | `claude --version` returned `2.1.302` inside the isolated launcher; no proxy environment variables were present |
+| Fail-closed boundary | PASS | Stop withdrew the endpoint exception before namespace teardown; a subsequent Start was required to restore the tunnel |
+| Windows baseline after retest | NOT_RUN in this exact command batch | The mandatory Windows URLs were validated by the earlier UAC-approved synchronization/recovery record; repeat before any future host-policy mutation |
+
+The three provider results prove network reachability and TLS termination only;
+they do not prove authenticated API use. The German address is intentionally
+documented because it is the observed exit evidence, while private WireGuard
+keys, SSH material and full profile contents remain outside Git. Claude Desktop
+is not marked passed: its old `127.0.0.1:12345` proxy failure and the
+Ubuntu-22.04 GLIBC 2.39 native-binding requirement are separate from the
+working Claude Code CLI path.
+
+## 2026-10-18 final payload synchronization and fail-closed retest
+
+The reviewed source payload was synchronized through the administrator UAC
+path to both protected Program Files package trees, then installed into the
+journaled Ubuntu-22.04 WSL distribution with the endpoint closed. The update
+receipt reported `owned_config_matches=true`, `interop_runtime_disabled=true`,
+`endpoint_enabled=false`, and `network_changed=false`. The installed
+`manager.py` SHA256 matched the repository file
+(`9ce7fa6dd25cf7ffef88950202061ea20fe7790f9d87dd1ce6f9995e270df8b2`).
+
+The Stop→Start regression was exercised through the real broker:
+
+- UAC `Stop -Execute`: `succeeded`, phase `installed_closed`.
+- A protected workload launched after Stop: `blocked` with
+  `Namespace ownership mismatch; foreign namespace preserved.` No local
+  Windows fallback was available.
+- UAC `Start -Execute`: `succeeded`, phase `connected_unverified`; all five
+  scope checks were `PASS`.
+- Final isolated IPv4: `62.84.164.122`; Claude Code CLI: `2.1.302`.
+- Windows baseline after recovery: `ipgw.neu.edu.cn` HTTP 302 and
+  `api.okinto.com` HTTP 200.
+
+The first-Start failure was traced to a boot guard and explicit Start racing
+for `manager.lock`. The manager now waits up to 15 seconds with a 50 ms poll,
+then fails closed on timeout. The Linux static suite passed 75 tests in the
+Windows-host invocation (two Linux-only skips) and 75/75 inside Ubuntu-22.04;
+the Windows suites passed 161 and 167 assertions, package-upgrade 53,
+provisioning 26, and Rust WSL 27 tests. These results are the current local
+evidence for the repaired fork head; new-head GitHub Actions remains required.
+
 ## 2026-10-18 PR repair verification
 
 The following checks were executed after repairing the outstanding Fork PR
@@ -457,3 +571,34 @@ runtime remain `NOT_RUN`, `BLOCKED` or `FAIL` as recorded above.
 
 These are local worktree results. A new-head GitHub CI result is still pending;
 old-head CI evidence above must not be used to declare this repair's CI passed.
+
+## 2026-10-18 follow-up repair and recovery attempt (current session)
+
+This entry records only commands actually executed in the resumed session.
+
+| Check or operation | Result | Evidence and limits |
+| --- | --- | --- |
+| WSL PR repair coverage | PASS, 72 tests, 2 platform skips | `python scripts/wsl-secure-egress/tests/linux_static_test.py`; sibling runtime and uplink classifier fixtures |
+| VPS provisioning unit tests | PASS, 26 tests | Offline mocked host boundaries |
+| VPS server unit tests | PASS, 24 tests | Offline profile validation |
+| Rust WSL request tests | PASS, 27 tests | `cargo test -p clash-client-core wsl::tests --locked --offline`; endpoint-only Install/Start requires a profile |
+| Windows broker unit tests | PASS, 149 assertions | Offline mocks; no host policy writes |
+| Windows workflow tests | PASS, 161 assertions | `wsl_started=false`, `firewall_modified=false`, `scheduled_tasks_modified=false` |
+| Package upgrade tests | PASS, 53 assertions | Offline; no service or network changes |
+| Git whitespace check | PASS | `git diff --check` |
+| Admin Start / scope renewal | BLOCKED | UAC-launched PowerShell produced no result; prior elevation reported user cancellation |
+| Current broker Status | FAIL-CLOSED | `phase=failed_closed_requested`, host policy PASS, Linux runtime PASS, scope attestation NOT_RUN, protection unknown |
+| Hyper-V endpoint rule | Disabled | Persistent rule targets the journaled VPS UDP endpoint and port; `Enabled=False` |
+| Linux manager Status | Local-only success, end-to-end UNVERIFIED | `phase=Running`, `protection=Unverified`; local guard/interface check explicitly makes no end-to-end claim |
+| Claude stale proxy cleanup | Applied with backup | User unit backed up under `/var/backups/clash-wsl-repair-20261018/`, autostart disabled, old proxy environment and Electron arguments removed |
+| Claude / model-vendor network tests | NOT_RUN | Endpoint exception disabled and no current end-to-end VPS proof exists |
+| Legacy Claude proxy retirement | Preview only | Known old units inactive/disabled; original files retained; no `--execute` retirement |
+
+The installed Linux namespaces and a recent WireGuard handshake were observed,
+but that does not override the disabled Windows endpoint rule or manager
+`Unverified` status. Do not start Claude or issue model-vendor requests until an
+authorized administrator Start completes scope renewal and full egress
+acceptance confirms the VPS source address, tunnel DNS, and IPv6 policy.
+
+The Claude user service remains disabled as a fail-safe; its original unit
+backup is preserved in the root-only WSL backup directory above.

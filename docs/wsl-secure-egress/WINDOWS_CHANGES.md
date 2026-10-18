@@ -76,7 +76,11 @@ The WSL broker does not modify Windows-wide VPN state, unrelated adapters,
 network changes require the mandatory Windows connectivity baseline and an
 immediate targeted recovery path.
 
-During this PR repair the installed Clash of Rust 0.6.0 remains running; the
-newly compiled source has not replaced that installation. Production WSL is
-`installed_closed`. Archive and workflow tests establish local implementation
-behavior, not production restart, external exit or model-client acceptance.
+During this repair the installed Clash of Rust 0.6.0 package was synchronized
+from the reviewed payload under both protected Program Files locations. The
+administrator broker and guardian were restarted through the approved UAC
+path. Current WSL protection is fail-closed at the Windows boundary and the
+controlled Linux Stop→Start retest restored the tunnel; the broker's
+end-to-end status remains `Unverified` until the full scope-renewal audit is
+accepted. Archive and workflow tests establish local implementation behavior;
+they do not replace cold-boot, physical network-switch or sleep/resume tests.

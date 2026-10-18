@@ -41,10 +41,11 @@ in [UPSTREAM_COMPARISON.md](UPSTREAM_COMPARISON.md); the fork's official update
 channel is deliberately disabled, so it would be inaccurate to call all
 non-WSL application behavior unchanged.
 
-The last upstream revision included in HEAD is `a27d154`, merged by `1eed8b3`.
-The refreshed upstream main is `37683750b37be9d2bbcfb22804bec96174e14af5`;
-its contributor-documentation commit has not yet been merged at this writing.
-No upstream PR is requested.
+The refreshed upstream main is
+`37683750b37be9d2bbcfb22804bec96174e14af5` (fetched 2026-10-18). The fork
+head contains it and is 39 commits ahead with zero commits behind. The
+additional commits are the fork's WSL backend, its UI/controller integration,
+packaging and tests; no upstream PR is requested.
 
 ## Validation
 
@@ -53,7 +54,8 @@ PowerShell fixtures passed 125 Windows unit, 96 workflow, 21 elevation and 38
 package-upgrade assertions. UI and controller tests do not claim that a live
 WSL tunnel, VPS geography or cold boot has been executed.
 
-The actual installed app remains 0.6.0 under `%ProgramFiles%\Clash of Rust`
-and is running. A successful source build is not an installed application
-upgrade or a fresh GUI acceptance test; the repaired source has not replaced
-the installed binary.
+The installed app remains 0.6.0 under `%ProgramFiles%\Clash of Rust` and is
+running. The protected helper payload was synchronized to the installed
+resources and exercised through the UAC broker. A successful source build is
+not itself a fresh GUI acceptance test; the UI's structured result remains
+dependent on the broker's current scope audit.

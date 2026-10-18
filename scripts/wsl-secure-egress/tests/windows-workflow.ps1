@@ -96,9 +96,10 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         $script:Calls.Add('restore-wslconfig')
     }
     function script:Save-WslEgressRestoredGeneration {
-        param($State)
+        param($State, [switch]$RetainLiveState)
         $script:Calls.Add('archive-restored')
         $script:Archived = $State
+        $script:RetainedLiveState = [bool]$RetainLiveState
         'fixture-archive'
     }
     function script:Set-NetFirewallHyperVVMSetting {
@@ -128,6 +129,20 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         $State.endpoint_enabled = $Enabled
         $script:Calls.Add('endpoint:' + [string]$Enabled)
     }
+
+    Reset-Fixture
+    $script:Fixture.phase = 'restored'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Running = @()
+    $reinstallRejected = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\missing.json'
+    Assert-Equal $reinstallRejected.outcome 'failed' 'invalid reinstall profile reports failure'
+    Assert-Equal $reinstallRejected.phase 'restored' 'invalid reinstall preserves the terminal phase'
+    Assert-Equal $script:Fixture.generation 41 'invalid reinstall preserves the retired generation'
+    Assert-Equal ($script:Calls -contains 'archive-restored') $false 'invalid profile never retires the old journal'
+    Assert-Equal @($script:Writes | Where-Object { $_.file -eq 'state.json' }).Count 0 'invalid reinstall never rewrites restored state'
+    $restoredStatus = Invoke-WslEgressOperation -Action Status
+    Assert-Equal $restoredStatus.generation 41 'status after invalid reinstall keeps its nonzero generation'
+    Assert-Equal $restoredStatus.phase 'restored' 'status after invalid reinstall remains terminal and refreshable'
 
     Reset-Fixture
     $started = Invoke-WslEgressOperation -Action Start -Execute
@@ -172,6 +187,17 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal ($script:Calls -contains 'inspection') $true 'adopted installation is inspected'
     Assert-Equal $script:Writes.Count 0 'idempotent Install never replaces the rollback snapshot'
     Assert-Equal ($script:Calls -contains 'endpoint:True') $false 'idempotent Install does not open an endpoint'
+
+    foreach ($failedPhase in @('failed_closed_requested', 'closure_unverified')) {
+        Reset-Fixture
+        $script:Fixture.phase = $failedPhase
+        $script:Fixture.endpoint_enabled = $false
+        $script:Running = @()
+        $blockedInstall = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\egress.json'
+        Assert-Equal $blockedInstall.outcome 'blocked' "$failedPhase Install cannot adopt incomplete state"
+        Assert-Equal $blockedInstall.phase $failedPhase "$failedPhase Install preserves recovery phase"
+        Assert-Equal (@($script:Calls | Where-Object { $_ -notin @('baseline', 'running-inventory') }).Count -eq 0) $true "$failedPhase Install performs no mutating network or WSL operation"
+    }
 
     Reset-Fixture
     $stopped = Invoke-WslEgressOperation -Action Stop -Execute
@@ -262,6 +288,7 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         $script:Calls.Add('process:' + ($Arguments -join ','))
         [pscustomobject]@{ ExitCode = 0; Output = ''; Error = '' }
     }
+    function script:Complete-WslEgressGenerationCutover { $script:Calls.Add('complete-generation-cutover') }
     function script:Invoke-WslEgressLinux {
         param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
         $script:Calls.Add('linux:' + $Action)
@@ -271,9 +298,123 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     $reinstalled = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\egress.json'
     Assert-Equal ($script:Calls -contains 'archive-restored') $true 'fresh Install archives the verified restored journal'
     Assert-Equal ($script:Archived.generation) 41 'archive retains the retired Windows generation'
-    Assert-Equal $reinstalled.outcome 'succeeded' 'restored journal permits a fresh install transaction'
+    Assert-Equal $script:RetainedLiveState $true 'reinstall retains the old live journal until the new atomic save'
+    Assert-Equal $reinstalled.outcome 'succeeded' "restored journal permits a fresh install transaction ($($reinstalled.message); phase=$($reinstalled.phase); checks=$($reinstalled.checks | ConvertTo-Json -Compress))"
     Assert-Equal $reinstalled.phase 'installed_closed' 'fresh install completes in a closed state'
     Assert-Equal ($script:Calls -contains 'install-hyperv') $true 'fresh install recreates the host guard'
+    Assert-Equal ($script:Calls -contains 'complete-generation-cutover') $true 'fresh install retires generation sidecars only after writing its new state'
+
+    # The full path must use dictionary-safe snapshot lookup, not PSObject's
+    # property list (which does not expose OrderedDictionary keys).
+    function script:Get-NetFirewallHyperVRule { @() }
+    foreach ($action in @('Rollback', 'Uninstall')) {
+        Reset-Fixture
+        $script:Running = @()
+        $script:Fixture.settings_written = $true
+        $script:Fixture.endpoint_rule_written = $false
+        $script:Fixture.before_persistent_settings = [ordered]@{
+            Enabled = 'False'; DefaultInboundAction = 'Allow'; DefaultOutboundAction = 'Allow'
+            AllowHostPolicyMerge = 'True'; LoopbackEnabled = 'True' }
+        $script:Fixture.after_settings = $script:Fixture.before_persistent_settings
+        $fullRestore = Invoke-WslEgressOperation -Action $action -Execute -RestoreOriginalNetwork
+        Assert-Equal $fullRestore.outcome 'succeeded' "$action restores an OrderedDictionary journal"
+        Assert-Equal $fullRestore.phase 'restored' "$action records the completed terminal phase"
+        Assert-Equal ($script:Calls -contains 'linux:rollback') $true "$action reaches Linux rollback after reading the snapshot"
+        Assert-Equal ($script:Calls -contains 'restore-hyperv') $true "$action restores the recorded persistent Hyper-V snapshot"
+    }
+
+    $linuxFixtureImplementation = (Get-Command Invoke-WslEgressLinux).ScriptBlock
+    $stopFixtureImplementation = (Get-Command Stop-WslEgressDistribution).ScriptBlock
+    $processFixtureImplementation = (Get-Command Invoke-WslEgressProcess).ScriptBlock
+    $saveFixtureImplementation = (Get-Command Save-WslEgressJson).ScriptBlock
+    function script:Invoke-WslEgressLinux {
+        param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
+        if ($Action -eq 'configure') {
+            Assert-Equal (@($State.distro_configs) -contains $Distribution) $true 'distro recovery target is recorded before configure can write'
+            Assert-Equal (@($State.distro_config_pending) -contains $Distribution) $true 'unacknowledged configuration is recorded before Linux journal creation'
+            Assert-Equal ($script:Writes[-1].file) 'state.json' 'distro recovery target is persisted immediately before configure'
+            if ($script:DistroFailure -eq 'configure' -and $Distribution -eq 'Fedora') { throw 'fixture second configure failure' }
+        }
+        [ordered]@{ outcome = 'succeeded'; phase = 'Guarded'; checks = @() }
+    }
+    function script:Stop-WslEgressDistribution {
+        param([string]$Name)
+        if ($script:DistroFailure -eq 'terminate' -and $Name -eq 'Debian') { throw 'fixture terminate failure' }
+    }
+    function script:Invoke-WslEgressProcess {
+        param($Arguments, $InputText, $TimeoutSeconds)
+        [pscustomobject]@{ ExitCode = $(if ($script:DistroFailure -eq 'shutdown') { 1 } else { 0 }); Output = ''; Error = '' }
+    }
+    foreach ($failure in @('configure', 'terminate', 'shutdown')) {
+        Reset-Fixture
+        $script:DistroFailure = $failure
+        $distroRejected = $false
+        try {
+            Invoke-WslEgressDistroConfiguration $script:Fixture ([pscustomobject]@{}) @(
+                [pscustomobject]@{ name = 'Ubuntu' },
+                [pscustomobject]@{ name = 'Debian' },
+                [pscustomobject]@{ name = 'Fedora' })
+        } catch { $distroRejected = $true }
+        Assert-Equal $distroRejected $true "$failure failure is reported"
+        $expectedDistros = if ($failure -eq 'terminate') { 'Debian' } else { 'Debian,Fedora' }
+        Assert-Equal (@($script:Fixture.distro_configs) -join ',') $expectedDistros "$failure failure retains every possible modified distro for rollback"
+        $expectedPending = if ($failure -eq 'configure') { 'Fedora' } else { '' }
+        Assert-Equal (@($script:Fixture.distro_config_pending) -join ',') $expectedPending "$failure failure only permits an absent Linux journal for unacknowledged configuration"
+    }
+    Set-Item -LiteralPath Function:script:Invoke-WslEgressLinux -Value $linuxFixtureImplementation
+    Set-Item -LiteralPath Function:script:Stop-WslEgressDistribution -Value $stopFixtureImplementation
+    Set-Item -LiteralPath Function:script:Invoke-WslEgressProcess -Value $processFixtureImplementation
+
+    function script:Invoke-WslEgressLinux {
+        param($State, $Action, $InputText, $AdditionalArguments, $Distribution)
+        $script:Calls.Add('linux:' + $Action)
+        if ($Action -eq 'restore-config') {
+            $allowUnconfigured = @($AdditionalArguments) -contains '--allow-unconfigured'
+            Assert-Equal $allowUnconfigured ($script:RestoreFixtureKind -ne 'completed-no-journal') 'missing-journal recovery is explicitly limited to write-ahead configuration'
+            if ($script:RestoreFixtureKind -eq 'pending-transport-error') { throw 'fixture transport error' }
+            if ($script:RestoreFixtureKind -in @('completed-no-journal', 'pending-drift')) {
+                return [ordered]@{ outcome = 'blocked'; phase = 'Blocked'; checks = @() }
+            }
+            return [ordered]@{ outcome = 'succeeded'; phase = 'DistroUnconfigured'; checks = @() }
+        }
+        [ordered]@{ outcome = 'succeeded'; phase = 'Guarded'; checks = @() }
+    }
+    foreach ($scenario in @('pending-no-journal', 'completed-no-journal', 'pending-drift', 'pending-transport-error')) {
+        Reset-Fixture
+        $script:RestoreFixtureKind = $scenario
+        $script:Running = @()
+        $script:Fixture.settings_written = $true
+        $script:Fixture.endpoint_rule_written = $false
+        $script:Fixture.before_persistent_settings = Get-WslEgressSettings
+        $script:Fixture.after_settings = $script:Fixture.before_persistent_settings
+        $script:Fixture.distro_configs = @('Debian')
+        if ($scenario -ne 'completed-no-journal') { $script:Fixture.distro_config_pending = @('Debian') }
+        $recovered = Invoke-WslEgressOperation -Action Rollback -Execute -RestoreOriginalNetwork
+        $expectedOutcome = if ($scenario -eq 'pending-no-journal') { 'succeeded' } else { 'failed' }
+        Assert-Equal $recovered.outcome $expectedOutcome "$scenario recovery reports the Linux result"
+        Assert-Equal ($script:Calls -contains 'restore-hyperv') ($scenario -eq 'pending-no-journal') "$scenario only restores host access after verified distro recovery"
+        Assert-Equal ($script:Calls -contains 'linux:rollback') ($scenario -eq 'pending-no-journal') "$scenario does not swallow Linux drift or transport errors"
+        Assert-Equal $script:Fixture.endpoint_enabled $false "$scenario keeps the endpoint disabled throughout recovery"
+    }
+    Set-Item -LiteralPath Function:script:Invoke-WslEgressLinux -Value $linuxFixtureImplementation
+
+    Reset-Fixture
+    $script:Fixture.phase = 'restored'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Running = @()
+    function script:Save-WslEgressJson {
+        param($Value, $Path)
+        if ([IO.Path]::GetFileName($Path) -eq 'state.json' -and $Value.generation -ne 41) {
+            throw 'fixture new generation atomic save failure'
+        }
+        $script:Writes.Add([pscustomobject]@{ file = [IO.Path]::GetFileName($Path); value = $Value })
+    }
+    $saveRejected = Invoke-WslEgressOperation -Action Install -Execute -ProfilePath 'C:\Private\egress.json'
+    Assert-Equal $saveRejected.outcome 'failed' 'new generation save failure is reported'
+    Assert-Equal $saveRejected.phase 'restored' 'new generation save failure retains terminal phase'
+    Assert-Equal $script:Fixture.generation 41 'new generation save failure keeps the old journal identity'
+    Assert-Equal ($script:Calls -contains 'install-hyperv') $false 'new generation save failure cannot start host mutations'
+    Set-Item -LiteralPath Function:script:Save-WslEgressJson -Value $saveFixtureImplementation
 
     Reset-Fixture
     $null = Invoke-WslEgressScopeRenewal
@@ -306,7 +447,8 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     $definition = [pscustomobject]@{ name = 'ClashOfRust-WslEgress-Renew'; path = '\'
         executable = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
         arguments = '-NoLogo -NoProfile -NonInteractive -File "C:\Program Files\Clash of Rust\resources\wsl-secure-egress\Renew-ScopeAttestation.ps1"'
-        owner_sid = 'S-1-5-21-1001-1002-1003-1000' }
+        owner_sid = 'S-1-5-21-1001-1002-1003-1000'
+        owner_account = 'CONTOSO\wsl-owner' }
     $task = [pscustomobject]@{ TaskName = $definition.name; TaskPath = '\'
         Principal = [pscustomobject]@{ UserId = $definition.owner_sid; LogonType = 'Interactive'; RunLevel = 'Highest' }
         Actions = @([pscustomobject]@{ Execute = $definition.executable; Arguments = $definition.arguments; WorkingDirectory = '' }) }

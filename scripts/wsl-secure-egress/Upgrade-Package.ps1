@@ -9,7 +9,7 @@ The code-only recovery journal never contains a profile or a network snapshot.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Apply','Commit','Rollback')][string]$Action = 'Apply',
+    [ValidateSet('CreateManifest','Apply','Commit','Rollback')][string]$Action = 'Apply',
     [string]$InstallationPath,
     [string]$PackagePath,
     [string]$ManifestPath,
@@ -112,6 +112,26 @@ function Assert-PackageManifest([string]$Source, [string]$Manifest, [string]$Exp
             throw 'Staged package bytes differ from the approved manifest.'
         }
     }
+}
+
+function New-PackageManifest([string]$Source, [string]$Manifest) {
+    $source = Assert-PackagePath $Source
+    $manifestFile = Assert-PackagePath $Manifest
+    if ($manifestFile -ieq $source -or
+        $manifestFile.StartsWith($source + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The manifest must be outside the staged package.'
+    }
+    Protect-PackageDirectory ([IO.Path]::GetDirectoryName($manifestFile))
+    Protect-PackageDirectory $source
+    $records = [ordered]@{}
+    foreach ($file in @(Get-ChildItem -LiteralPath $source -Recurse -Force -File)) {
+        $path = Assert-PackagePath $file.FullName
+        $records[$path.Substring($source.Length + 1)] = Get-PackageHash $path
+    }
+    [IO.File]::WriteAllText($manifestFile,
+        ([ordered]@{ schema_version=1; files=$records } | ConvertTo-Json -Depth 6),
+        (New-Object Text.UTF8Encoding($false)))
+    Get-PackageHash $manifestFile
 }
 
 function Write-PackageFiles([object]$Journal, [string]$Root) {
@@ -418,7 +438,13 @@ function Invoke-PackageUpgrade {
 
 if ($MyInvocation.InvocationName -ne '.') {
     try {
-        $approved = $null
+        if ($Action -eq 'CreateManifest') {
+            # The elevated installer creates this only after extracting its
+            # complete package. The digest is passed separately to Apply.
+            [Console]::Write((New-PackageManifest $PackagePath $ManifestPath))
+            exit 0
+        }
+        $approvedPath = $null
         $manifestDigest = $null
         if ($Action -eq 'Apply') {
             if (-not $ManifestPath -or $ExpectedManifestSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
@@ -429,9 +455,9 @@ if ($MyInvocation.InvocationName -ne '.') {
             if ($manifestDigest -ne $ExpectedManifestSha256.ToUpperInvariant()) {
                 throw 'The private manifest differs from the approved SHA256.'
             }
-            $approved = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+            $approvedPath = $ManifestPath
         }
-        Invoke-PackageUpgrade $Action $InstallationPath $PackagePath $approved $manifestDigest
+        Invoke-PackageUpgrade $Action $InstallationPath $PackagePath $approvedPath $manifestDigest
         [ordered]@{ outcome='succeeded'; action=$Action; endpoint_reopened=$false
             network_service_preserved=$true } | ConvertTo-Json -Compress
         exit 0

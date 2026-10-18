@@ -488,13 +488,13 @@ class RetireLegacyTests(unittest.TestCase):
         self.units = [
             {
                 'unit': 'xuan-docker-firewall.service',
-                'sha256': 'firewall-hash',
+                'sha256': 'a' * 64,
                 'enabled': 'enabled',
                 'active': 'active',
             },
             {
                 'unit': 'xuan-claude-de.service',
-                'sha256': 'claude-hash',
+                'sha256': 'b' * 64,
                 'enabled': 'disabled',
                 'active': 'inactive',
             },
@@ -502,7 +502,7 @@ class RetireLegacyTests(unittest.TestCase):
         self.calls = []
         self.open_modes = []
 
-    def invoke(self, *extra, inventory=None):
+    def invoke(self, *extra, inventory=None, fail_on=None):
         inventory = inventory if inventory is not None else copy.deepcopy(self.units)
         inventory_calls = []
 
@@ -517,6 +517,8 @@ class RetireLegacyTests(unittest.TestCase):
 
         def fake_run(args, check=True):
             self.calls.append(list(args))
+            if list(args) == fail_on:
+                raise RuntimeError('Simulated systemctl interruption.')
             return types.SimpleNamespace(returncode=0, stdout='')
 
         original_open = os.open
@@ -527,6 +529,8 @@ class RetireLegacyTests(unittest.TestCase):
 
         with patch.object(retire, 'run', side_effect=fake_run), \
                 patch.object(retire, 'inventory', side_effect=fake_inventory), \
+                patch.object(retire, 'validate_journal_path'), \
+                patch.object(retire, 'safe_root_file', return_value=True), \
                 patch.object(retire.os, 'geteuid', return_value=0, create=True), \
                 patch.object(retire.os, 'O_NOFOLLOW', 0, create=True), \
                 patch.object(retire.os, 'open', side_effect=tracked_open), \
@@ -628,6 +632,109 @@ class RetireLegacyTests(unittest.TestCase):
             self.invoke('--rollback')
         self.assertTrue(self.override.exists())
         self.assertTrue(self.runtime.exists())
+        self.assertEqual(self.calls, [])
+
+    def test_rollback_rejects_non_whitelisted_unit_and_malformed_digest(self):
+        state = self.make_rollback_state()
+        state['units'][0]['unit'] = 'attacker.service'
+        self.journal.write_text(json.dumps(state), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'Invalid retirement journal entry'):
+            self.invoke('--rollback')
+        self.assertEqual(self.calls, [])
+
+        state = self.make_rollback_state()
+        state['units'][0]['sha256'] = None
+        self.journal.write_text(json.dumps(state), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'Invalid retirement journal entry'):
+            self.invoke('--rollback')
+        self.assertEqual(self.calls, [])
+
+    def test_journal_file_metadata_requires_root_private_single_link_regular_file(self):
+        regular = stat.S_IFREG | 0o600
+        self.assertTrue(retire.safe_root_file(
+            types.SimpleNamespace(st_mode=regular, st_uid=0, st_nlink=1),
+            private=True,
+        ))
+        for metadata in (
+                types.SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_uid=0, st_nlink=1),
+                types.SimpleNamespace(st_mode=regular, st_uid=1000, st_nlink=1),
+                types.SimpleNamespace(st_mode=regular, st_uid=0, st_nlink=2),
+                types.SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_uid=0, st_nlink=1)):
+            self.assertFalse(retire.safe_root_file(metadata, private=True))
+
+    def test_journal_rejects_untrusted_parent_and_file_metadata(self):
+        directory = types.SimpleNamespace(
+            st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_nlink=1)
+        private = types.SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o600, st_uid=0, st_nlink=1)
+        for unsafe_path, metadata in (
+                (self.journal.parent, types.SimpleNamespace(
+                    st_mode=stat.S_IFDIR | 0o777, st_uid=0, st_nlink=1)),
+                (self.journal.parent, types.SimpleNamespace(
+                    st_mode=stat.S_IFDIR | 0o755, st_uid=1000, st_nlink=1)),
+                (self.journal.parent, types.SimpleNamespace(
+                    st_mode=stat.S_IFLNK | 0o777, st_uid=0, st_nlink=1)),
+                (self.journal, types.SimpleNamespace(
+                    st_mode=stat.S_IFREG | 0o644, st_uid=0, st_nlink=1)),
+                (self.journal, types.SimpleNamespace(
+                    st_mode=stat.S_IFLNK | 0o777, st_uid=0, st_nlink=1))):
+            def fake_stat(path):
+                if path == unsafe_path:
+                    return metadata
+                return private if path == self.journal else directory
+
+            with patch.object(Path, 'lstat', autospec=True, side_effect=fake_stat):
+                with self.assertRaises(ValueError):
+                    retire.validate_journal_path(self.journal)
+
+    def test_rollback_retry_accepts_override_removed_by_interrupted_attempt(self):
+        state = self.make_rollback_state()
+        state['phase'] = 'restoring'
+        self.journal.write_text(json.dumps(state), encoding='utf-8')
+        self.override.unlink()
+
+        result = self.invoke('--rollback')
+
+        self.assertEqual(result['phase'], 'restored')
+        self.assertFalse(self.override.exists())
+        self.assertFalse(self.runtime.exists())
+        self.assertIn(
+            ['systemctl', 'start', 'xuan-docker-firewall.service'],
+            self.calls,
+        )
+
+    def test_prepared_rollback_accepts_overrides_not_yet_created(self):
+        state = self.make_rollback_state()
+        state['phase'] = 'prepared'
+        self.journal.write_text(json.dumps(state), encoding='utf-8')
+        self.override.unlink()
+        self.runtime.unlink()
+        self.assertEqual(self.invoke('--rollback')['phase'], 'restored')
+        self.assertIn(['systemctl', 'enable', self.units[0]['unit']], self.calls)
+
+    def test_rollback_resumes_after_systemctl_failure(self):
+        self.make_rollback_state()
+        with self.assertRaisesRegex(RuntimeError, 'Simulated systemctl interruption'):
+            self.invoke('--rollback', fail_on=[
+                'systemctl', 'enable', self.units[0]['unit']])
+        self.assertFalse(self.override.exists())
+        self.assertTrue(self.runtime.exists())
+        self.assertEqual(json.loads(self.journal.read_text())['phase'], 'restoring')
+        self.assertEqual(self.invoke('--rollback')['phase'], 'restored')
+
+    def test_completed_rollback_retry_does_not_repeat_systemd_actions(self):
+        self.make_rollback_state()
+        self.invoke('--rollback')
+        self.calls.clear()
+        self.assertEqual(self.invoke('--rollback')['phase'], 'restored')
+        self.assertEqual(self.calls, [])
+
+    def test_changed_runtime_override_blocks_before_apt_removal(self):
+        self.make_rollback_state()
+        self.runtime.write_bytes(b'foreign')
+        with self.assertRaisesRegex(ValueError, 'Runtime override changed'):
+            self.invoke('--rollback')
+        self.assertTrue(self.override.exists())
         self.assertEqual(self.calls, [])
 
 

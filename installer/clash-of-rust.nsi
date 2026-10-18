@@ -69,6 +69,8 @@ Var KeepAutostart
 Var UpdateMode
 Var UpdateBackup
 Var UpdateScript
+Var UpdateManifest
+Var UpdateManifestHash
 Var NativePowerShell
 Var DeleteUserData
 Var UserDataDir
@@ -310,7 +312,15 @@ Section "Clash of Rust" MainSection
     Abort
   ${EndIf}
   ${If} $UpdateMode == 1
-    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Apply -InstallationPath "$INSTDIR" -PackagePath "$PLUGINSDIR\package"' $0
+    StrCpy $UpdateManifest "$PLUGINSDIR\package-manifest.json"
+    nsExec::ExecToStack '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action CreateManifest -PackagePath "$PLUGINSDIR\package" -ManifestPath "$UpdateManifest"'
+    Pop $0
+    Pop $UpdateManifestHash
+    ${If} $0 != 0
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Apply -InstallationPath "$INSTDIR" -PackagePath "$PLUGINSDIR\package" -ManifestPath "$UpdateManifest" -ExpectedManifestSha256 "$UpdateManifestHash"' $0
     ${If} $0 != 0
       SetErrorLevel 6
       Abort
