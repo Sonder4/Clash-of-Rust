@@ -199,8 +199,8 @@ function Invoke-PackageUpgrade {
     Assert-Equal ($installer -match '-Action Apply .*?-ManifestPath "\$UpdateManifest" -ExpectedManifestSha256 "\$UpdateManifestHash"') `
         $true 'installer Apply carries both manifest approval arguments'
 
-    [ordered]@{ suite='package-upgrade-offline'; result='PASS'; assertions=$testCount
-        services_modified=$false; network_tests='NOT_RUN'; wsl_started=$false } | ConvertTo-Json -Compress
+    $result = [ordered]@{ suite='package-upgrade-offline'; result='PASS'; assertions=$testCount
+        services_modified=$false; network_tests='NOT_RUN'; wsl_started=$false }
 } finally {
     if (Test-Path Function:\Copy-Item) { Remove-Item Function:\Copy-Item }
     $resolved = [IO.Path]::GetFullPath($testRoot)
@@ -210,3 +210,5 @@ function Invoke-PackageUpgrade {
     }
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
+$result | ConvertTo-Json -Compress
+exit 0

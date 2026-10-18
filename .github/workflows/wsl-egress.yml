@@ -61,10 +61,16 @@ jobs:
       - name: Offline host policy tests
         shell: powershell
         run: |
-          ./scripts/wsl-secure-egress/tests/windows-unit.ps1
-          ./scripts/wsl-secure-egress/tests/elevation-unit.ps1
-          ./scripts/wsl-secure-egress/tests/windows-workflow.ps1
-          ./scripts/wsl-secure-egress/tests/package-upgrade-unit.ps1
+          $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          foreach ($test in @(
+            './scripts/wsl-secure-egress/tests/windows-unit.ps1',
+            './scripts/wsl-secure-egress/tests/elevation-unit.ps1',
+            './scripts/wsl-secure-egress/tests/windows-workflow.ps1',
+            './scripts/wsl-secure-egress/tests/package-upgrade-unit.ps1'
+          )) {
+            & $powershell -NoLogo -NoProfile -NonInteractive -File $test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Real WFP IPv4/IPv6 TCP/UDP loopback test
         shell: powershell
         run: ./scripts/wsl-secure-egress/tests/windows-wfp.ps1 -ExecuteIsolated | Out-File -Encoding utf8 windows-wsl-egress-results.json

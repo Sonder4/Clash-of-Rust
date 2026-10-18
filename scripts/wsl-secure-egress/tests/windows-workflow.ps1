@@ -12,6 +12,7 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         $script:Assertions++
     }
     $completeInstallationImplementation = (Get-Command Test-WslEgressCompleteInstallation).ScriptBlock
+    $scopeAttestationImplementation = (Get-Command Get-WslEgressScopeAttestation).ScriptBlock
     function Reset-Fixture {
         $script:Calls.Clear(); $script:Writes.Clear()
         $script:Administrator = $true; $script:AuditValid = $true
@@ -290,7 +291,11 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         } else { throw 'Unexpected Linux action.' }
     }
     Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $true 'same-generation complete blocked installation is adoptable'
-    Assert-Equal ($script:AdoptionLinuxActions -join ',') 'status,audit-config,audit-config' 'adoption audits the manager and configured distro'
+    Assert-Equal (($script:AdoptionLinuxActions -join ',').StartsWith('status,audit-config,audit-config')) $true 'adoption audits the manager and configured distro'
+    Assert-Equal ($script:Calls -contains 'full-scope-audit') $true 'adoption requires the same full scope audit as Start'
+    $script:ScopeGood = $false
+    Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'failed full scope audit prevents adoption'
+    $script:ScopeGood = $true
     $completeState.generation = 40
     Assert-Equal (& $completeInstallationImplementation $completeState $completeDistributions) $false 'generation mismatch prevents adoption'
     $completeState.generation = 41
@@ -748,6 +753,50 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal ($script:Calls -contains 'install-hyperv') $false 'new generation save failure cannot start host mutations'
     Set-Item -LiteralPath Function:script:Save-WslEgressJson -Value $saveFixtureImplementation
 
+    # A prepared reinstall has already cleaned every Windows-owned object except
+    # the predecessor host guard. Rollback without explicit consent must preserve
+    # that guard and perform no Windows restore side effects.
+    Reset-Fixture
+    $script:Fixture.phase = 'prepared_for_reinstall'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Fixture.settings_write_started = $true
+    $script:Fixture.settings_written = $true
+    $script:Fixture.docker_guard_written = $true
+    $script:Fixture.guardian_service_installed = $true
+    $script:Fixture.wslconfig = [ordered]@{ after_hash = 'fixture' }
+    $script:Fixture.linux_manager_install_started = $false
+    $script:Fixture.linux_manager_installed = $false
+    $script:Running = @()
+    $script:Calls.Clear()
+    function script:Restore-WslEgressPartialInstall {
+        param($State, [switch]$PreserveGuard)
+        $script:Calls.Add('partial-restore')
+    }
+    $preparedBlocked = Invoke-WslEgressOperation -Action Rollback -Execute
+    Assert-Equal $preparedBlocked.outcome 'blocked' 'prepared reinstall rollback requires explicit original-network restore'
+    Assert-Equal $preparedBlocked.phase 'prepared_for_reinstall' 'prepared reinstall stays in its fail-closed phase'
+    Assert-Equal ($script:Calls -contains 'partial-restore') $false 'prepared reinstall implicit rollback performs no Windows restore'
+    Assert-Equal ($script:Calls -contains 'endpoint:False') $true 'prepared reinstall rollback confirms endpoint closure'
+
+    Reset-Fixture
+    $script:Fixture.phase = 'prepared_for_reinstall'
+    $script:Fixture.endpoint_enabled = $false
+    $script:Fixture.settings_write_started = $true
+    $script:Fixture.settings_written = $true
+    $script:Fixture.linux_manager_install_started = $false
+    $script:Fixture.linux_manager_installed = $false
+    $script:Running = @()
+    $script:Calls.Clear()
+    function script:Restore-WslEgressPartialInstall {
+        param($State, [switch]$PreserveGuard)
+        $script:Calls.Add('partial-restore')
+        $State.phase = 'restored'
+    }
+    $preparedRestored = Invoke-WslEgressOperation -Action Rollback -Execute -RestoreOriginalNetwork
+    Assert-Equal $preparedRestored.outcome 'succeeded' 'prepared reinstall explicit rollback restores original networking'
+    Assert-Equal $preparedRestored.phase 'restored' 'prepared reinstall explicit rollback reaches restored phase'
+    Assert-Equal (@($script:Calls | Where-Object { $_ -eq 'partial-restore' }).Count) 1 'prepared reinstall explicit rollback restores once'
+
     Reset-Fixture
     $null = Invoke-WslEgressScopeRenewal
     Assert-Equal ($script:Calls -contains 'full-scope-audit') $true 'scheduled renewal performs a fresh complete audit'
@@ -795,4 +844,8 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     [pscustomobject]@{ suite = 'windows-workflow-offline'; result = 'PASS'; assertions = $script:Assertions
         network_tests = 'NOT_RUN'; wsl_started = $false; firewall_modified = $false; scheduled_tasks_modified = $false } |
         ConvertTo-Json -Compress
+    exit 0
+} catch {
+    Write-Error $_
+    exit 1
 }

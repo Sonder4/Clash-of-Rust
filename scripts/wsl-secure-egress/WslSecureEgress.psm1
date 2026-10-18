@@ -717,6 +717,13 @@ function Test-WslEgressCompleteInstallation([object]$State, [object[]]$Distribut
                 -not $audit.facts.owned_config_matches -or
                 -not $audit.facts.interop_runtime_disabled) { return $false }
         }
+        $scope = Get-WslEgressScopeAttestation $State
+        if (-not $scope.effective_audit_passed -or
+            -not $scope.all_distros_managed -or
+            -not $scope.hyperv_default_deny -or
+            -not $scope.dns_tunneling_disabled -or
+            -not $scope.interop_disabled -or
+            -not $scope.docker_desktop_blocked) { return $false }
         $true
     } catch {
         $false
@@ -2017,14 +2024,21 @@ function Invoke-WslEgressOperation {
             }
         } elseif ($Action -in @('Rollback','Uninstall') -and (Test-WslEgressPartialInstall $state) -and
             [string]$state.phase -eq 'prepared_for_reinstall') {
-            # A reinstall cleanup already restored every Windows-owned object
-            # except the predecessor's default-deny policy. This branch may
-            # restore that predecessor snapshot because no Linux manager exists.
+            Set-WslEgressEndpoint $state $false
+            if (-not $RestoreOriginalNetwork) {
+                $state.phase = 'prepared_for_reinstall'
+                Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
+                $result.outcome = 'blocked'; $result.phase = $state.phase
+                $result.message = 'Prepared reinstall remains fail-closed. Use -RestoreOriginalNetwork after stopping all WSL distributions to recover Windows-only objects.'
+                return $result
+            }
             if ($runningNames.Count -gt 0) {
                 throw 'All WSL processes must be stopped manually before restoring host access.'
             }
+            $closedCompensationRequired = $true
             try {
                 Restore-WslEgressPartialInstall $state
+                $closedCompensationRequired = $false
                 $result.outcome = 'succeeded'; $result.phase = 'restored'
                 $result.generation = [long]$state.generation; $result.backend = [string]$state.backend
                 $result.message = 'Prepared reinstall recovered; original Windows network configuration restored.'
