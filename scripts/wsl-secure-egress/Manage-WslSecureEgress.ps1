@@ -12,7 +12,7 @@ param(
     [ValidateSet('Doctor','Status','Install','Start','Stop','Test','Rollback','Uninstall')]
     [string]$Action = 'Doctor',
     [ValidateSet('Tailscale','WireGuard')][string]$Backend = 'WireGuard',
-    [string]$Distro = 'COR-Egress',
+    [string]$Distro = '',
     [string]$ProfilePath,
     [string]$EndpointIPv4,
     [ValidateRange(1,65535)][int]$EndpointPort = 51820,

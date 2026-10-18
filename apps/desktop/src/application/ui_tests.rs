@@ -113,6 +113,46 @@ fn wsl_busy_inputs_and_stale_callbacks_do_not_disturb_the_active_operation() {
 }
 
 #[test]
+fn wsl_actual_deployment_is_separate_from_installation_draft_and_global_core() {
+    use clash_client_core::wsl::{Action as W, Backend};
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Wsl);
+    app.wsl.draft.backend = Backend::Tailscale;
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let ticket = app
+        .wsl
+        .evidence
+        .begin(app.wsl.draft.request(W::Status, false))
+        .unwrap();
+    let mut report = wsl_report(W::Status, 10);
+    report.backend = Backend::WireGuard;
+    report
+        .checks
+        .retain(|check| check.id != "tailscale_connected");
+    let _ = app.update(Message::Wsl(wsl::Event::Finished(
+        ticket,
+        Box::new(Ok(report)),
+        String::new(),
+    )));
+    app.present(&data, &mut models);
+    assert!(data.get_wsl_installed());
+    assert_eq!(data.get_wsl_deployed_backend(), "WireGuard");
+    assert_eq!(data.get_wsl_backend(), "WireGuard");
+    assert!(data.get_wsl_tunnel().starts_with("unknown"));
+    assert!(data.get_wsl_functional().starts_with("Blocked"));
+    let _ = app.intent(Intent::WslInput, "profile-path", "unfinished draft");
+    app.present(&data, &mut models);
+    assert!(data.get_wsl_installed());
+    assert_eq!(data.get_wsl_deployed_backend(), "WireGuard");
+    assert_eq!(data.get_wsl_profile_path(), "unfinished draft");
+    assert!(data.get_wsl_deployment().contains("generation 10"));
+    assert_eq!(data.get_wsl_protection(), "blocked");
+}
+
+#[test]
 fn wsl_restore_requires_a_separate_confirmation_and_cancel_keeps_policy_untouched() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Wsl);

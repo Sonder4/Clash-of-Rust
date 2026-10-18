@@ -28,6 +28,9 @@ record.
   Switch data changes are outside this feature.
 - Actual results for CI and local checks are recorded separately in
   [TEST_STATUS.md](TEST_STATUS.md). A test that has not executed is `NOT_RUN`.
+- The [2026-10-18 local usability report](LOCAL_TEST_2026-10-18.md) records
+  vendor-facing VPS source verification, DNS packet sampling, and the remaining
+  Desktop and launcher blockers. It does not claim complete acceptance.
 
 ## Documentation
 

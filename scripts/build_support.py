@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 RESOURCE_NAMES = ('default.yaml', 'settings-defaults.json', 'THIRD-PARTY-NOTICES.txt')
 GEO_NAMES = ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb')
 WSL_EGRESS_TOP = ('DockerEgressGuard.cs', 'Guardian-Audit.ps1', 'Uninstall-Check.ps1',
-                  'Manage-WslSecureEgress.ps1', 'WslSecureEgress.psm1')
+                  'Manage-WslSecureEgress.ps1', 'Upgrade-Package.ps1', 'WslSecureEgress.psm1',
+                  'Invoke-WslSecureEgressElevated.ps1', 'Renew-ScopeAttestation.ps1')
 WSL_EGRESS_LINUX = ('CONTRACT.md', 'cor-egress-manager', 'install-payload.py',
                     'manager', 'manager.py', 'secure-egress')
 WSL_EGRESS_SERVER = ('cor-wsl-egress.service', 'manage.py')

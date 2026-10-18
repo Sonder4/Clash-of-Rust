@@ -131,6 +131,17 @@ impl std::fmt::Debug for Request {
 }
 
 impl Request {
+    /// Operate on the broker's installed journal. Installation drafts must not
+    /// override an existing deployment, including after a client restart.
+    pub fn installed(action: Action, backend: Backend, execute: bool) -> Self {
+        Self {
+            action,
+            backend,
+            execute,
+            ..Self::default()
+        }
+    }
+
     pub fn validate(&self) -> Result<(), Error> {
         if self.restore_original_network
             && (!self.execute || !matches!(self.action, Action::Rollback | Action::Uninstall))
@@ -162,13 +173,20 @@ impl Request {
         {
             return Err(Error::DockerDesktopUnsupported);
         }
-        // Doctor/Status/Stop/Rollback/Uninstall can run without an endpoint.
-        // Install preflight also reports missing prerequisites in the helper.
-        if (self.action == Action::Start || self.action == Action::Install && self.execute)
-            && self.endpoint_ipv4.is_empty()
+        if matches!(self.action, Action::Install | Action::Start)
+            && self.execute
+            && self.backend == Backend::Tailscale
+        {
+            return Err(Error::UnsupportedBackend);
+        }
+        // A host/port pair cannot supply WireGuard keys. Start may omit all
+        // installation inputs: the broker must load its protected journal and
+        // reject an absent or inconsistent deployment itself.
+        if matches!(self.action, Action::Install | Action::Start)
+            && self.execute
             && self.profile_path.is_empty()
         {
-            return Err(Error::MissingEndpoint);
+            return Err(Error::MissingProfile);
         }
         Ok(())
     }

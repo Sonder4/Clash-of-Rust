@@ -88,6 +88,7 @@ pub(super) fn run(
                 return;
             };
             host.message(Message::Tick);
+            host.message(Message::Wsl(wsl::Event::Tick));
             if host.app.claude.session.is_some() {
                 host.message(Message::Claude(claude_view::Event::Tick));
             }

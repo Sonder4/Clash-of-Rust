@@ -20,7 +20,8 @@ $ErrorActionPreference = 'Stop'
 $destination = Join-Path $env:ProgramFiles 'Clash of Rust WSL'
 $source = $PSScriptRoot
 $top = @('DockerEgressGuard.cs','Guardian-Audit.ps1','Uninstall-Check.ps1',
-    'Manage-WslSecureEgress.ps1','WslSecureEgress.psm1')
+    'Manage-WslSecureEgress.ps1','WslSecureEgress.psm1','Invoke-WslSecureEgressElevated.ps1',
+    'Upgrade-Package.ps1','Renew-ScopeAttestation.ps1')
 $linux = @('CONTRACT.md','cor-egress-manager','install-payload.py','manager','manager.py','secure-egress')
 $server = @('cor-wsl-egress.service','manage.py')
 $files = [ordered]@{ 'clash-wsl-guardian.exe' = [IO.Path]::GetFullPath($GuardianExe) }

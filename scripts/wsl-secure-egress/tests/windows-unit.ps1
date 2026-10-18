@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -Force -PassThru
 & $module {
+    $saveJsonImplementation = (Get-Command Save-WslEgressJson).ScriptBlock
     $script:Calls = [Collections.Generic.List[string]]::new()
     $script:MockAdministrator = $false
     $script:MockState = $null
@@ -48,7 +49,7 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal $doctor.distributions[0].state 'unknown' 'doctor does not infer running state'
     foreach ($action in @('Install','Start','Stop','Rollback','Uninstall')) {
         $preview = Invoke-WslEgressOperation -Action $action
-        Assert-Equal $preview.outcome 'not_run' "preview $action cannot mutate"
+        Assert-Equal $preview.outcome $(if ($action -eq 'Install') { 'blocked' } else { 'not_run' }) "preview $action cannot mutate"
         Assert-Equal $preview.phase 'preflight' "preview $action reports preflight"
         Assert-Equal $preview.protection 'unknown' "preview $action cannot claim a block"
     }
@@ -61,7 +62,7 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     $test = Invoke-WslEgressOperation -Action Test
     Assert-Equal $test.outcome 'not_run' 'acceptance not invented'
     Assert-Equal $test.phase 'acceptance_pending' 'acceptance pending is distinct from connection'
-    Assert-Equal @($test.checks | Where-Object { $_.result -ne 'NOT_RUN' }).Count 0 'no unexecuted runtime test is passed'
+    Assert-Equal @($test.checks | Where-Object { $_.id -ne 'administrator' -and $_.result -ne 'NOT_RUN' }).Count 0 'no unexecuted runtime test is passed'
     Assert-Equal ($script:Calls | Where-Object { $_ -ne 'enumerate' } | Measure-Object).Count 0 'no boundary calls escaped mocks'
     $base = @(
         [pscustomobject]@{host='portal.example.test';dns='PASS';tls='PASS';http_status=302;expected_statuses=@(200,302)},
@@ -95,8 +96,8 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal $converted.checks[0].id 'owned-config' 'Linux check names translate'
     Assert-Equal $converted.checks[0].result 'PASSED' 'Linux check outcomes translate'
     Assert-Equal $converted.facts.shared_netns 'net:[1]' 'Linux audit facts remain available to Windows'
-    $profileState = [ordered]@{ endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; manager_distro = 'COR-Egress' }
-    $profile = [pscustomobject]@{ endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; manager_distro = 'COR-Egress' }
+    $profileState = [ordered]@{ endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; manager_distro = 'COR-Egress'; backend = 'WireGuard' }
+    $profile = [pscustomobject]@{ endpoint_ipv4 = '203.0.113.8'; endpoint_port = 51820; manager_distro = 'COR-Egress'; backend = 'WireGuard' }
     Assert-WslEgressProfileForState $profile $profileState
     $script:TestCount++
     $profile.endpoint_ipv4 = '203.0.113.9'
@@ -195,16 +196,78 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal (Test-WslEgressGuardianServiceIdentity ([pscustomobject]@{ PathName = ('"' + $helperGuardian + '" --service'); StartName = 'NT AUTHORITY\LocalService' })) $false 'a non-system account is not owned'
     Assert-Equal (Test-WslEgressGuardianServiceIdentity $null) $false 'an absent service is not owned'
     $script:MockService = [pscustomobject]@{ PathName = ('"' + $helperGuardian + '" --service'); StartName = 'LocalSystem'; StartMode = 'Auto' }
-    Install-WslEgressGuardian
+    $guardianState = [ordered]@{}
+    Install-WslEgressGuardian $guardianState
     $script:TestCount++
     Assert-Equal $script:MockCreatedBinary $null 'an existing canonical service is adopted instead of recreated'
     Assert-Equal $script:MockStarted 1 'the adopted service is started'
     $script:MockService = [pscustomobject]@{ PathName = ('"' + (Join-Path $PSScriptRoot '../../clash-wsl-guardian.exe') + '" --service'); StartName = 'LocalSystem'; StartMode = 'Auto' }
     $script:MockStarted = 0
     $foreignRejected = $false
-    try { Install-WslEgressGuardian } catch { $foreignRejected = $true }
+    try { Install-WslEgressGuardian ([ordered]@{}) } catch { $foreignRejected = $true }
     Assert-Equal $foreignRejected $true 'a foreign service image keeps installation closed'
     Assert-Equal $script:MockStarted 0 'a refused service is never started'
+    # Exercise the real archive writer and filesystem operations in a private
+    # temporary state root; the protected ProgramData state is never selected.
+    Set-Item -LiteralPath Function:script:Save-WslEgressJson -Value $saveJsonImplementation
+    $originalStateRoot = $script:StateRoot
+    $temporaryRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) ('cor-egress-archive-test-' + [guid]::NewGuid().ToString('N'))))
+    New-Item -ItemType Directory -Path $temporaryRoot -ErrorAction Stop | Out-Null
+    try {
+        foreach ($scenario in @('valid', 'tampered-snapshot', 'missing-snapshot')) {
+            $script:StateRoot = Join-Path $temporaryRoot $scenario
+            New-Item -ItemType Directory -Path $script:StateRoot -ErrorAction Stop | Out-Null
+            $snapshot = Join-Path $script:StateRoot 'wslconfig.before'
+            [IO.File]::WriteAllText($snapshot, "[wsl2]`nnetworkingMode=mirrored`n")
+            $archiveState = [ordered]@{
+                schema_version = 1; owner = 'ClashOfRust.WslEgress'
+                phase = 'restored'; generation = 67; endpoint_enabled = $false
+                wslconfig = [ordered]@{ existed = $true; before_hash = (Get-WslEgressFileHash $snapshot) }
+                before_persistent_settings = [ordered]@{ DefaultOutboundAction = 'Allow' }
+            }
+            Save-WslEgressJson $archiveState (Join-Path $script:StateRoot 'state.json')
+            foreach ($name in @('scope-renewal.json', 'guardian-audit.json', 'unrelated-recovery.json')) {
+                [IO.File]::WriteAllText((Join-Path $script:StateRoot $name), ('{"fixture":"' + $name + '"}'))
+            }
+            $liveStateHash = Get-WslEgressFileHash (Join-Path $script:StateRoot 'state.json')
+            $unrelatedHash = Get-WslEgressFileHash (Join-Path $script:StateRoot 'unrelated-recovery.json')
+            if ($scenario -eq 'tampered-snapshot') { [IO.File]::AppendAllText($snapshot, "# later edit`n") }
+            if ($scenario -eq 'missing-snapshot') { Remove-Item -LiteralPath $snapshot -ErrorAction Stop }
+            $archiveRejected = $false
+            try { $archive = Save-WslEgressRestoredGeneration $archiveState }
+            catch {
+                if ($_.Exception.Message -notlike '*snapshot failed verification*') { throw }
+                $archiveRejected = $true
+            }
+            Assert-Equal $archiveRejected ($scenario -ne 'valid') "$scenario archive accepts only the recorded snapshot"
+            Assert-Equal (Get-WslEgressFileHash (Join-Path $script:StateRoot 'unrelated-recovery.json')) $unrelatedHash "$scenario archive preserves unrelated recovery data"
+            if ($archiveRejected) {
+                Assert-Equal (Get-WslEgressFileHash (Join-Path $script:StateRoot 'state.json')) $liveStateHash "$scenario archive preserves the live journal after failed verification"
+                Assert-Equal (Test-Path -LiteralPath (Join-Path $script:StateRoot 'scope-renewal.json')) $true "$scenario archive does not retire live proof before verification"
+                Assert-Equal (Test-Path -LiteralPath (Join-Path $script:StateRoot 'guardian-audit.json')) $true "$scenario archive does not retire live audit before verification"
+                continue
+            }
+            Assert-Equal ([IO.Path]::GetDirectoryName($archive)) $script:StateRoot 'verified archive stays inside the test state root'
+            $readback = [IO.File]::ReadAllText((Join-Path $archive 'state.json')) | ConvertFrom-Json
+            Assert-Equal $readback.phase 'restored' 'real archived journal readback retains the restored phase'
+            Assert-Equal $readback.generation 67 'real archived journal readback retains its generation'
+            Assert-Equal $readback.before_persistent_settings.DefaultOutboundAction 'Allow' 'real archived journal retains its recovery settings'
+            Assert-Equal (Get-WslEgressFileHash (Join-Path $archive 'wslconfig.before')) $archiveState.wslconfig.before_hash 'real archived snapshot matches its recorded SHA256'
+            foreach ($name in @('state.json', 'wslconfig.before', 'scope-renewal.json', 'guardian-audit.json')) {
+                Assert-Equal (Test-Path -LiteralPath (Join-Path $archive $name) -PathType Leaf) $true "verified archive retains $name"
+                Assert-Equal (Test-Path -LiteralPath (Join-Path $script:StateRoot $name)) $false "verified archive retires live $name only after readback"
+            }
+        }
+    } finally {
+        $script:StateRoot = $originalStateRoot
+        $resolvedTemporaryRoot = [IO.Path]::GetFullPath($temporaryRoot)
+        $expectedTemporaryParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+        if ([IO.Path]::GetDirectoryName($resolvedTemporaryRoot) -ne $expectedTemporaryParent -or
+            [IO.Path]::GetFileName($resolvedTemporaryRoot) -notmatch '^cor-egress-archive-test-[0-9a-f]{32}$') {
+            throw 'Refusing cleanup outside the exact archive test directory.'
+        }
+        Remove-Item -LiteralPath $resolvedTemporaryRoot -Recurse -Force -ErrorAction Stop
+    }
     [pscustomobject]@{ suite = 'windows-offline'; result = 'PASS'; assertions = $script:TestCount
         network_tests = 'NOT_RUN'; wsl_started = $false; firewall_modified = $false } | ConvertTo-Json -Compress
 }

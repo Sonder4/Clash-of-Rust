@@ -47,12 +47,18 @@ pub fn begin() -> Result<Session, String> {
 
 #[cfg(windows)]
 pub async fn choose() -> Result<Option<PathBuf>, String> {
-    tokio::task::spawn_blocking(windows_choose)
+    tokio::task::spawn_blocking(|| windows_choose(false))
         .await
         .map_err(|e| e.to_string())?
 }
 #[cfg(windows)]
-fn windows_choose() -> Result<Option<PathBuf>, String> {
+pub async fn choose_wsl_profile() -> Result<Option<PathBuf>, String> {
+    tokio::task::spawn_blocking(|| windows_choose(true))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[cfg(windows)]
+fn windows_choose(wsl_profile: bool) -> Result<Option<PathBuf>, String> {
     use windows::Win32::{
         System::Com::{
             CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -81,7 +87,11 @@ fn windows_choose() -> Result<Option<PathBuf>, String> {
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
             .map_err(|e| e.to_string())?;
         dialog
-            .SetTitle(windows::core::w!("Clash of Rust · 选择订阅文件"))
+            .SetTitle(if wsl_profile {
+                windows::core::w!("Clash of Rust · 选择 WSL 私密 JSON 配置")
+            } else {
+                windows::core::w!("Clash of Rust · 选择订阅文件")
+            })
             .map_err(|e| e.to_string())?;
         dialog
             .SetOptions(FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM)

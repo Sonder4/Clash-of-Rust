@@ -1,5 +1,9 @@
-//! Ordinary-user, fixed-file bridge. This never starts a service or elevates.
+//! Fixed-file WSL bridge with a same-user UAC channel for privileged operations.
 use std::ffi::OsString;
+
+#[cfg(windows)]
+#[path = "elevation.rs"]
+mod elevation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -7,6 +11,9 @@ pub(in crate::application) enum Error {
     Unsupported,
     Unavailable,
     SystemAccount,
+    ElevationCancelled,
+    ElevationTimedOut,
+    IdentityMismatch,
     Launch,
     Timeout,
     Output,
@@ -18,7 +25,18 @@ impl Error {
             Self::Unsupported => "WSL 安全网络仅支持 Windows。",
             Self::Unavailable => "受信任的 WSL 管理资源不可用；请修复 fork 安装包。",
             Self::SystemAccount => "禁止使用 SYSTEM 身份操作用户 WSL。",
-            Self::Launch => "无法启动 WSL 管理操作；未自动提权。",
+            Self::ElevationCancelled => {
+                "已取消管理员授权，未执行本次网络变更。请再次点击原操作，并在 Windows UAC 中允许当前用户提权。"
+            }
+            Self::ElevationTimedOut => {
+                "等待管理员授权超时，未发送管理请求。请取消仍显示的 UAC 窗口，再重新执行原操作。"
+            }
+            Self::IdentityMismatch => {
+                "管理员进程身份校验失败，未发送管理请求。请使用当前 Windows 用户授权，不要输入其他管理员账户。"
+            }
+            Self::Launch => {
+                "无法启动 WSL 管理操作。请确认正式安装完整，并允许 Windows 显示管理员授权窗口。"
+            }
             Self::Timeout => "WSL 管理操作超时；实际保护状态未知，请刷新状态后再操作。",
             Self::Output => "WSL 管理输出无效或超过大小限制；保护状态未知。",
         }
@@ -38,6 +56,16 @@ pub(super) async fn run(arguments: Vec<OsString>) -> Result<String, Error> {
     let (powershell, script, _verified) = tokio::task::spawn_blocking(trusted_paths)
         .await
         .map_err(|_| Error::Unavailable)??;
+    if needs_elevation(&arguments) {
+        if !protected_installation(&script) {
+            return Err(Error::Unavailable);
+        }
+        let helper = script
+            .parent()
+            .ok_or(Error::Unavailable)?
+            .join("Invoke-WslSecureEgressElevated.ps1");
+        return elevation::run(powershell, helper, arguments).await;
+    }
     let directory = script.parent().ok_or(Error::Unavailable)?;
     let mut child = tokio::process::Command::new(powershell)
         .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
@@ -86,6 +114,13 @@ pub(super) async fn run(arguments: Vec<OsString>) -> Result<String, Error> {
             Err(Error::Timeout)
         }
     }
+}
+
+fn needs_elevation(arguments: &[OsString]) -> bool {
+    arguments.iter().any(|argument| argument == "-Execute")
+        || arguments
+            .windows(2)
+            .any(|pair| pair[0] == "-Action" && pair[1] == "Test")
 }
 
 #[cfg(windows)]
@@ -181,36 +216,44 @@ pub(super) async fn administrator_command(arguments: Vec<OsString>) -> String {
         return "# 管理员操作仅支持 Program Files 内的正式安装资源；请先修复定制版安装位置。"
             .into();
     }
-    let quote =
-        |text: &std::ffi::OsStr| format!("'{}'", text.to_string_lossy().replace('\'', "''"));
-    // The elevated process runs under a different token. Ask the same Windows
-    // user to start an elevated PowerShell explicitly; an administrator can
-    // then execute the reviewed command after reading it.
-    let mut parts = vec![
-        "Start-Process".into(),
-        "-FilePath".into(),
-        quote(powershell.as_os_str()),
-        "-Verb".into(),
-        "RunAs".into(),
-        "-ArgumentList".into(),
-    ];
-    let mut inner = vec![
-        "-NoLogo".to_owned(),
-        "-NoProfile".to_owned(),
-        "-NonInteractive".to_owned(),
-        "-File".to_owned(),
-        quote(script.as_os_str()),
-    ];
-    inner.extend(arguments.iter().map(|argument| quote(argument)));
-    // Start-Process joins ArgumentList with spaces. Escape embedded PowerShell
-    // quotes once for that join, then escape again for the outer single-quoted
-    // literal. This keeps the displayed command from breaking on paths.
-    let argument_list = inner.join(" ").replace('"', "\\\"");
-    parts.push(format!("'{}'", argument_list.replace('\'', "''")));
-    format!(
-        "# 复制到当前用户的 PowerShell 后手动执行；会显示 UAC，不会静默提权：\n{}",
-        parts.join(" ")
-    )
+    administrator_fallback(&powershell, &script, &arguments)
+        .unwrap_or_else(|_| "# 路径无法安全编码；请修复正式安装位置。".into())
+}
+
+#[cfg(windows)]
+fn administrator_arguments(
+    script: &std::path::Path,
+    arguments: &[OsString],
+) -> Result<String, Error> {
+    let fixed = ["-NoLogo", "-NoProfile", "-NonInteractive", "-File"];
+    fixed
+        .iter()
+        .map(std::ffi::OsStr::new)
+        .chain(std::iter::once(script.as_os_str()))
+        .chain(arguments.iter().map(OsString::as_os_str))
+        .map(elevation::quote)
+        .collect::<Result<Vec<_>, _>>()
+        .map(|parts| parts.join(" "))
+}
+
+#[cfg(windows)]
+fn administrator_fallback(
+    powershell: &std::path::Path,
+    script: &std::path::Path,
+    arguments: &[OsString],
+) -> Result<String, Error> {
+    // Start-Process joins ArgumentList into one native command line. First use
+    // Windows native quoting, then wrap that complete string as one PS literal.
+    // No shell in the client evaluates this optional, display-only fallback.
+    let literal = |value: &str| format!("'{}'", value.replace('\'', "''"));
+    let executable = powershell.to_str().ok_or(Error::Unavailable)?;
+    let inner = administrator_arguments(script, arguments)?;
+    Ok(format!(
+        "# 复制到当前用户的 PowerShell 后手动执行；会显示 UAC，不会静默提权：\n\
+         Start-Process -FilePath {} -Verb RunAs -Wait -ArgumentList {}",
+        literal(executable),
+        literal(&inner),
+    ))
 }
 
 #[cfg(windows)]
@@ -242,10 +285,98 @@ fn protected_installation(script: &std::path::Path) -> bool {
     ) else {
         return false;
     };
-    script.starts_with(folder)
+    if !script.starts_with(&folder) {
+        return false;
+    }
+    for path in script.ancestors() {
+        if !elevation::protected_permissions(path) {
+            return false;
+        }
+        if path == folder {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(not(windows))]
 pub(super) async fn administrator_command(_arguments: Vec<OsString>) -> String {
     "WSL 安全网络仅支持 Windows。".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readonly_and_preflight_never_request_uac() {
+        for action in ["Doctor", "Status", "Install"] {
+            assert!(!needs_elevation(&[
+                "-Action".into(),
+                action.into(),
+                "-ProfilePath".into(),
+                "C:\\private\\-Execute.json".into(),
+            ]));
+        }
+        assert!(needs_elevation(&[
+            "-Action".into(),
+            "Start".into(),
+            "-Execute".into()
+        ]));
+        assert!(needs_elevation(&["-Action".into(), "Test".into()]));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn administrator_fallback_preserves_native_paths_and_powershell_literals() {
+        use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::Path};
+        use windows_sys::Win32::{Foundation::LocalFree, UI::Shell::CommandLineToArgvW};
+
+        let script = Path::new(r"C:\Program Files\Clash's Rust\Manage-WslSecureEgress.ps1");
+        let args = vec![
+            OsString::from("-ProfilePath"),
+            OsString::from(r#"C:\private folder\a"quoted"\profile.json"#),
+            OsString::from("-Distro"),
+            OsString::from("a'b c\\"),
+        ];
+        let inner = administrator_arguments(script, &args).unwrap();
+        let command: Vec<u16> = OsStr::new(&format!("powershell.exe {inner}"))
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let mut count = 0;
+        let raw = unsafe { CommandLineToArgvW(command.as_ptr(), &mut count) };
+        assert!(!raw.is_null());
+        let values = unsafe { std::slice::from_raw_parts(raw, count as usize) }
+            .iter()
+            .map(|&text| {
+                let mut length = 0;
+                unsafe {
+                    while *text.add(length) != 0 {
+                        length += 1;
+                    }
+                    String::from_utf16(std::slice::from_raw_parts(text, length)).unwrap()
+                }
+            })
+            .collect::<Vec<_>>();
+        unsafe { LocalFree(raw.cast()) };
+        assert_eq!(values[5], script.to_str().unwrap());
+        assert_eq!(
+            values[6..],
+            args.iter()
+                .map(|arg| arg.to_str().unwrap())
+                .collect::<Vec<_>>()
+        );
+        let fallback = administrator_fallback(
+            Path::new(r"C:\Program Files\PowerShell's\powershell.exe"),
+            script,
+            &args,
+        )
+        .unwrap();
+        assert!(fallback.contains("-FilePath 'C:\\Program Files\\PowerShell''s\\powershell.exe'"));
+        assert!(fallback.contains("-Verb RunAs -Wait -ArgumentList '"));
+        assert!(fallback.contains("Clash''s Rust"));
+        assert!(fallback.contains("\"C:\\Program Files\\"));
+        assert!(fallback.ends_with('\''));
+    }
 }

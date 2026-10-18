@@ -278,7 +278,13 @@ class RemoteHarness:
                         json.dumps({'server_public_key': 'server-public'}),
                         encoding='utf-8',
                     )
-                return types.SimpleNamespace(returncode=0, stdout=stdout)
+                returncode = 0
+                if list(args) == [
+                        'systemctl', 'is-active', '--quiet',
+                        'cor-wsl-egress.service']:
+                    returncode = 3
+                return types.SimpleNamespace(
+                    returncode=returncode, stdout=stdout, stderr=b'')
 
         return FakeSubprocess()
 
@@ -378,6 +384,14 @@ class RemoteSecurityGateTests(unittest.TestCase):
              'deployment.json').read_text(encoding='utf-8'))
         self.assertEqual(record['phase'], 'running')
         self.assertEqual(len(record['ufw_added']), 4)
+        self.assertFalse(record['service_was_active'])
+        self.assertLess(
+            self.harness.calls.index([
+                'systemctl', 'is-active', '--quiet',
+                'cor-wsl-egress.service']),
+            self.harness.calls.index([
+                'systemctl', 'enable', '--now',
+                'cor-wsl-egress.service']))
 
     def prepare_rollback_journal(self, manage=b'manage', unit=b'unit'):
         root = self.harness.path('/var/lib/cor-wsl-egress')

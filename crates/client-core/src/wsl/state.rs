@@ -111,9 +111,10 @@ impl State {
             Ok(report) => report,
             Err(error) => return self.reject(error),
         };
+        let inspects_installed_backend = matches!(report.action, Action::Doctor | Action::Status)
+            || report.action == Action::Install && !ticket.request.execute;
         if report.action != ticket.request.action
-            || !matches!(report.action, Action::Doctor | Action::Status)
-                && report.backend != ticket.request.backend
+            || !inspects_installed_backend && report.backend != ticket.request.backend
         {
             return self.reject(Error::ReportMismatch);
         }

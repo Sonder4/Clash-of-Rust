@@ -3,6 +3,11 @@
 This file records executed results and their limits. Update it only from an
 actual run; never convert an unavailable or timed-out check into PASS.
 
+The latest PR repair results are in the final section. Earlier dated runs are
+historical evidence for their own revision. The installed Clash of Rust 0.6.0
+is still running, this source revision has not replaced it, and the production
+WSL journal is `installed_closed` with its endpoint disabled.
+
 ## Local offline checks
 
 Run on 2026-10-17 in the `Clash-of-Rust` worktree:
@@ -335,7 +340,46 @@ this branch edit this test record only, so they do not change the installed
 binary; any further commit that touches this document alone has the same
 property.
 
-## Acceptance rule
+## 2026-10-18 installed application and vendor-facing live tests
+
+The user subsequently completed the UAC installer. The installed application is
+now 0.6.0 under `%ProgramFiles%\Clash of Rust`; both network services are running
+and the installed Linux manager hash matches this repository's payload. This
+supersedes the earlier blocked-install observation above.
+
+The detailed [local test report](LOCAL_TEST_2026-10-18.md) records the actual
+09:42–09:53 Asia/Taipei execution and the retained per-step evidence under the
+ignored `ClashOfRust-network-backups/usability-20261018-094234/` directory.
+
+- PASS: ordinary WSL neutral and OpenAI/Claude web traces returned the configured
+  VPS IPv4, DE/FRA, with certificate verification enabled.
+- PASS: three unauthenticated API connections (OpenAI, Anthropic, DeepSeek)
+  returned 401 with valid TLS; an owned VPS packet observer correlated their
+  tunnel SYN, uplink SYN and reply with the clients' actual destination address
+  and verified the VPS source. This is network/source validation, not successful
+  authenticated inference.
+- PASS, sampled: one DNS nonce query/reply was observed on `wg0` and no matching
+  clear nonce was observed on WSL `eth0` during the capture window.
+- PASS, sampled: forced IPv6 failed; absolute Windows EXE execution failed with
+  errno 8 and WSLInterop was disabled. Windows mounts remained visible in
+  ordinary WSL and the current Desktop process.
+- BLOCKED: current formal sandbox launcher refused the expired five-minute
+  scope assertion. A new complete Windows WFP audit required UAC, whose attempt
+  returned cancellation. No assertion was forged; the ordinary WSL tests above
+  do not replace fresh sandbox acceptance.
+- FAIL: current Claude Desktop still points to an unlistened local proxy and
+  logs proxy failures. Its installed native binding also requires GLIBC_2.39
+  while the distro has glibc 2.35. No persistent app configuration was changed.
+- ERROR: a requested DeepSeek subagent was attempted but failed at the
+  platform's sealed-task cross-model boundary before running its task.
+- NOT_RUN: authenticated inference, a real standalone Claude Code session,
+  current isolated GUI/CLI use, production VPN loss, reboot, physical network
+  switch and sleep/resume. Overall protection remains Unverified.
+
+The report preserves probe errors and failed SSH/diagnostic attempts separately
+from the corrected reruns. Final Windows mandatory HTTPS and DNS checks passed.
+
+## Acceptance rule (unchanged)
 
 Positive connectivity requires a receiver-observed nonce, the expected source
 and counter evidence. A send success or timeout alone is not proof. A negative
@@ -347,3 +391,69 @@ fault injection is not authorized.
 
 Update this document after GitHub Actions and any approved VPS/WSL acceptance
 with the exact commit, run URL and per-scenario result.
+
+## 2026-10-18 PR repair verification
+
+The following checks were executed after repairing the outstanding Fork PR
+review comments. They are local results for the current worktree; they do not
+replace the new GitHub Actions run that will be created after push.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Linux static/boot-guard suite | PASS | WSL Ubuntu-22.04, 52 tests; expanded exact-rule, table ownership and boot-guard cases |
+| Windows workflow fixture | PASS | PowerShell, 96 assertions; no firewall, WSL or scheduled-task mutation |
+| Windows unit fixture | PASS | PowerShell, 125 assertions; includes actual temporary-directory archive copies, JSON readback and snapshot hash/tamper checks |
+| Windows elevation fixture | PASS | 21 assertions; UAC/process boundaries mocked |
+| Windows package-upgrade fixture | PASS | 38 assertions; package fixtures, no installed-package replacement |
+| VPS provisioning unit suite | PASS | 18 tests |
+| VPS server unit suite | PASS | 24 tests |
+| Acceptance harness unit suite | PASS | 3 tests |
+| PowerShell parser | PASS | Module, elevation, renewal, upgrade and workflow scripts |
+| Python syntax and diff check | PASS | `manager.py`, `prepare-vps.py`, `git diff --check` |
+| Rust WSL core tests | PASS | `cargo test -p clash-client-core wsl --release`: 27 passed |
+| Rust desktop WSL tests | PASS | `cargo test -p clash-of-rust wsl --release`: 27 passed; supersedes the earlier 22-test run |
+| Rust formatting | PASS | `cargo fmt --all -- --check` |
+| Rust clippy | PASS | `cargo clippy --release --workspace --all-targets -- -D warnings` |
+| Release build | PASS | `cargo build --release` |
+| Real WSL nft load | PASS | Temporary `unshare -n`; canonical guard accepted by nftables |
+| Real WSL deny probe | PASS | Temporary namespace could not connect to `192.0.2.1:9` after guard load |
+| Full disposable Linux integration rerun | PASS | Fresh Linux-native source copy; 89 cases, including kernel loading of closed/open-single/open-multiple-bridge guards; fixture receiver only |
+
+Review fixes covered by this pass:
+
+1. Install/Start requires a profile path; visible endpoint values are not a
+   substitute, and contradictory explicit overrides are rejected.
+2. Partial Windows rollback handles absent journal properties and restores
+   recorded host objects without an uninstalled Linux helper. Write-ahead
+   markers distinguish pre-manager failures from a Linux install that may
+   already have begun.
+3. Restored journals permit a new installation after the recovery generation
+   is archived. Real temporary-directory tests verify SHA256/readback before
+   retirement and preserve live evidence when a snapshot is missing or changed.
+4. All managed ordinary distros install the profile-independent boot guard.
+   Exact static, owned manager and unknown table cases, atomic replacement and
+   first-start races have regression coverage.
+5. VPS preparation tolerates the new systemd unit being inactive before its
+   first `enable --now`; exit status 3 is covered by the offline fixture.
+
+Failures encountered and corrected are retained as failures:
+
+- An initial Linux static invocation used Windows Python, which cannot import
+  Linux `fcntl`; it ran no Linux tests. The corrected WSL invocation passed
+  the 52-test suite.
+- An initial Cargo invocation used the wrong crate name and ran no tests.
+  The corrected package commands above each passed 27 tests.
+- Kernel nftables can reorder elements in a multi-source address set. The
+  guard matcher previously rejected that equivalent serialization. IP-prefix
+  normalization now handles ordering while preserving exact rule matching;
+  the subsequent kernel smoke and full disposable 89-case run passed.
+
+The actual running desktop process remains the installed 0.6.0 package under
+`C:\Program Files\Clash of Rust`; it was not replaced by this source build.
+The live WSL journal remains `installed_closed` with its endpoint disabled.
+Production cold boot, reboot, network switch, sleep/resume, authenticated model
+inference, standalone Claude Code isolation and the current Claude Desktop
+runtime remain `NOT_RUN`, `BLOCKED` or `FAIL` as recorded above.
+
+These are local worktree results. A new-head GitHub CI result is still pending;
+old-head CI evidence above must not be used to declare this repair's CI passed.

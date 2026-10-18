@@ -32,7 +32,8 @@ VPS path, and IPv6 is denied rather than routed locally.
    Business traffic is source-NATed to the tunnel address. IPv6 is dropped.
    Port 53 is restricted to the fixed tunnel resolver.
 5. **Application isolation.** `secure-egress run` enters the gateway network
-   namespace and creates new user, mount, PID, IPC, UTS and cgroup views. It
+   namespace and creates new user, mount, PID, IPC and UTS views; a separate
+   cgroup view is requested when the kernel permits it. It
    drops UID/GID privileges, clears supplementary groups and capabilities,
    sets `no_new_privs`, hides Windows mounts and host sockets, and refuses
    inherited directory/socket file descriptors.
@@ -65,9 +66,28 @@ transport. Start requires a fresh five-minute Windows attestation derived from
 the current distribution set, per-distribution configuration audit, effective
 Hyper-V policy, `.wslconfig` values and Docker containment.
 
+The installed owner may authorize a fixed, protected scheduled action during
+Start. That action uses the owner's interactive elevated token and repeats the
+effective audit before renewing the root-private Linux assertion. It does not
+run under SYSTEM or start stopped distributions. A failed renewal withdraws
+the endpoint permit and records the failure. New isolated launches still reject
+proof older than five minutes; a renewal is not permission to open a route.
+
 The attestation is an orchestration assertion, not packet evidence. Cold boot,
 network switching, sleep/resume, real WSL coverage and real VPS geography remain
 separate acceptance gates until executed.
+
+## Administrator channel
+
+The ordinary client requests UAC only for explicit management actions and the
+runtime test. It executes a fixed installed helper using `runas`. Arguments
+travel over a first-instance local named pipe with a caller-specific ACL, not
+over the UAC command line. Each peer verifies the other process ID, user and
+session; the client also verifies the returned process is elevated. The helper
+requires an administrator-owned Program Files resource tree without ordinary
+user write access. Requests use an argument allowlist and bounded JSON frames.
+Cancellation sends no management request. A timeout after dispatch is an
+unknown outcome that requires inspection, not an automatic rollback or retry.
 
 ## Tailscale and WireGuard
 

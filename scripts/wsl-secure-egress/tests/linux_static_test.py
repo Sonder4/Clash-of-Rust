@@ -37,7 +37,498 @@ with patch.object(subprocess, "run", side_effect=AssertionError("command during 
     manager_spec.loader.exec_module(manager)
 
 
+def manager_table_fixture(owner='owned', opened=False, state=None, profile=None):
+    expected = manager.manager_rule_expressions(
+        state if opened else None, profile if opened else None)
+    items = [{'table': {'family': 'inet', 'name': manager.TABLE,
+                        'comment': 'cor-egress:' + owner}}]
+    for name in expected:
+        chain = {'family': 'inet', 'table': manager.TABLE, 'name': name,
+                 'type': 'filter', 'hook': name, 'prio': -150, 'policy': 'drop'}
+        if name == 'nat_out':
+            chain.update(type='nat', hook='postrouting', prio=100, policy='accept')
+        items.append({'chain': chain})
+        items.extend({'rule': {'family': 'inet', 'table': manager.TABLE,
+                               'chain': name, 'expr': expression}}
+                     for expression in expected[name])
+    return {'nftables': items}
+
+
+class AttestationTests(unittest.TestCase):
+    def setUp(self):
+        self.instance = object.__new__(manager.Manager)
+        self.instance.s = {'generation': 71, 'phase': 'Running'}
+        self.instance.load = Mock()
+        self.instance.assert_table = Mock()
+        self.instance.health = Mock()
+        self.instance.save = Mock()
+        self.instance.audit_config = Mock(return_value={'facts': {
+            'owned_config_matches': True, 'interop_runtime_disabled': True}})
+        self.instance.event = Mock(return_value={'outcome': 'succeeded'})
+        self.assertion = dict(schema=1, generation=71, issued_at_unix=1000,
+                              all_distros_managed=True, hyperv_default_deny=True,
+                              dns_tunneling_disabled=True, interop_disabled=True,
+                              effective_audit_passed=True)
+
+    def renew(self, assertion=None):
+        raw = json.dumps(self.assertion if assertion is None else assertion).encode()
+        with patch.object(manager.sys, 'stdin', Mock(buffer=io.BytesIO(raw))), \
+                patch.object(manager.time, 'time', return_value=1001):
+            return self.instance.attest()
+
+    def test_only_a_current_matching_complete_audit_can_replace_proof(self):
+        with patch.object(manager, 'atomic') as write:
+            self.renew()
+            write.assert_called_once()
+            self.instance.health.assert_called_once()
+            self.instance.save.assert_called_once()
+            self.assertEqual(self.instance.s['attestation'],
+                             str(manager.STATE / 'scope-attestation.json'))
+        for updates in ({'generation': 72}, {'issued_at_unix': 700},
+                        {'issued_at_unix': 1002}, {'effective_audit_passed': False},
+                        {'all_distros_managed': 1}, {'issued_at_unix': True},
+                        {'issued_at_unix': float('nan')}, {'issued_at_unix': 10**400}):
+            with self.subTest(updates=updates), patch.object(manager, 'atomic') as write:
+                with self.assertRaises(manager.Blocked):
+                    self.renew(dict(self.assertion, **updates))
+                write.assert_not_called()
+
+    def test_closed_tunnel_and_config_drift_never_renew_proof(self):
+        with patch.object(manager, 'atomic') as write:
+            self.instance.s['phase'] = 'Guarded'
+            with self.assertRaises(manager.Blocked):
+                self.renew()
+            self.instance.health.assert_not_called()
+            self.instance.s['phase'] = 'Running'
+            self.instance.audit_config.return_value['facts']['owned_config_matches'] = False
+            with self.assertRaises(manager.Blocked):
+                self.renew()
+            write.assert_not_called()
+
+    def test_no_privileged_policy_operation_is_called_by_renewal(self):
+        for name in ('replace_table', 'start', 'stop', 'install',
+                     'setup_routing', 'sysctl_forward'):
+            setattr(self.instance, name, Mock(side_effect=AssertionError('network mutation')))
+        with patch.object(manager, 'atomic'):
+            self.renew()
+        self.assertEqual(manager.parse(['attest', '--generation', '71']).action, 'attest')
+
+
 class GateTests(unittest.TestCase):
+    def test_boot_guard_uses_fixed_installed_wrapper(self):
+        self.assertEqual(manager.boot_guard_command(),
+                         '/usr/local/lib/cor-egress/manager guard')
+
+    def test_existing_emergency_table_blocks_both_boot_paths(self):
+        for role in ('manager', 'distro-config'):
+            instance = object.__new__(manager.Manager)
+            instance.s = {'role': role, 'phase': 'Guarded'}
+            with self.subTest(role=role), \
+                    patch.object(manager, 'list_table', return_value={'nftables': []}), \
+                    patch.object(manager, 'ensure_static_boot_guard') as ensure_static:
+                with self.assertRaisesRegex(manager.Blocked, 'emergency table preserved'):
+                    instance.boot_guard()
+                ensure_static.assert_not_called()
+
+    def test_boot_emergency_matcher_accepts_missing_comment_only_for_exact_deny(self):
+        items = [
+            {'table': {'family': 'inet', 'name': manager.BOOT_EMERGENCY}},
+            {'chain': {'name': 'output', 'type': 'filter', 'hook': 'output',
+                       'prio': -200, 'policy': 'drop'}},
+            {'chain': {'name': 'forward', 'type': 'filter', 'hook': 'forward',
+                       'prio': -200, 'policy': 'drop'}},
+            {'rule': {'chain': 'output', 'expr': [{'counter': {}}, {'drop': None}]}},
+            {'rule': {'chain': 'forward', 'expr': [{'counter': {}}, {'drop': None}]}},
+        ]
+        with patch.object(manager, 'table_items', return_value=items):
+            self.assertTrue(manager.boot_emergency_matches())
+        with patch.object(manager, 'table_items',
+                          return_value=items + [{'rule': {'chain': 'output',
+                                                          'expr': [{'accept': None}]}}]):
+            self.assertFalse(manager.boot_emergency_matches())
+
+    def test_manager_matcher_rejects_unbounded_accept_rule(self):
+        listed = {'nftables': [
+            {'table': {'family': 'inet', 'name': manager.TABLE,
+                       'comment': 'cor-egress:owned'}},
+            {'chain': {'name': 'output', 'type': 'filter', 'hook': 'output',
+                       'prio': -150, 'policy': 'drop'}},
+            {'chain': {'name': 'forward', 'type': 'filter', 'hook': 'forward',
+                       'prio': -150, 'policy': 'drop'}},
+            {'rule': {'chain': 'output', 'expr': [{'accept': None}]}},
+        ]}
+        with patch.object(manager, 'list_table', return_value=listed):
+            self.assertFalse(manager.manager_table_matches('owned'))
+
+    def test_manager_matcher_rejects_forged_selector_names(self):
+        # A broad accept must not pass merely because unrelated JSON values
+        # contain the selector names the old textual matcher searched for.
+        forged = {'match': {
+            'op': '==',
+            'left': {'meta': {'key': 'oifname'}},
+            'right': {'comment': 'iifname saddr daddr udp sport dport'},
+        }}
+        listed = {'nftables': [
+            {'table': {'family': 'inet', 'name': manager.TABLE,
+                       'comment': 'cor-egress:owned'}},
+            {'chain': {'name': 'output', 'type': 'filter', 'hook': 'output',
+                       'prio': -150, 'policy': 'drop'}},
+            {'chain': {'name': 'forward', 'type': 'filter', 'hook': 'forward',
+                       'prio': -150, 'policy': 'drop'}},
+            {'rule': {'chain': 'output', 'expr': [
+                forged, {'accept': None},
+            ]}},
+        ]}
+        with patch.object(manager, 'list_table', return_value=listed):
+            self.assertFalse(manager.manager_table_matches('owned'))
+
+    def test_manager_matcher_accepts_exact_closed_loopback_rule(self):
+        listed = manager_table_fixture()
+        with patch.object(manager, 'list_table', return_value=listed):
+            self.assertTrue(manager.manager_table_matches('owned'))
+
+    def test_manager_matcher_requires_exact_open_rules_and_rejects_mutations(self):
+        state = {'uplink': 'eth0', 'root_sources': ['10.20.0.1/32'],
+                 'forward_sources': [{'interface': 'docker0',
+                                      'source_cidr': '172.18.0.0/16'}]}
+        profile = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                   'resolver_ipv4': '10.77.0.1'}
+        listed = manager_table_fixture(opened=True, state=state, profile=profile)
+        with patch.object(manager, 'list_table', return_value=listed):
+            self.assertTrue(manager.manager_table_matches(
+                'owned', opened=True, state=state, profile=profile))
+        mutations = []
+        wrong_endpoint = json.loads(json.dumps(listed))
+        for rule in wrong_endpoint['nftables']:
+            if rule.get('rule', {}).get('chain') == 'forward':
+                for expression in rule['rule']['expr']:
+                    match = expression.get('match', {})
+                    if match.get('left') == {'payload': {'protocol': 'ip', 'field': 'daddr'}}:
+                        match['right'] = '203.0.113.9'
+                        mutations.append(wrong_endpoint)
+                        break
+                if mutations:
+                    break
+        missing_v6 = json.loads(json.dumps(listed))
+        missing_v6['nftables'] = [
+            item for item in missing_v6['nftables']
+            if not (item.get('rule', {}).get('chain') == 'output' and
+                    item['rule']['expr'][0].get('match', {}).get('left') ==
+                    {'meta': {'key': 'nfproto'}} and
+                    item['rule']['expr'][0]['match']['right'] == 'ipv6')]
+        mutations.append(missing_v6)
+        extra_object = json.loads(json.dumps(listed))
+        extra_object['nftables'].append({'set': {'family': 'inet',
+                                                  'table': manager.TABLE,
+                                                  'name': 'unexpected'}})
+        mutations.append(extra_object)
+        for changed in mutations:
+            with patch.object(manager, 'list_table', return_value=changed):
+                self.assertFalse(manager.manager_table_matches(
+                    'owned', opened=True, state=state, profile=profile))
+
+    def test_manager_matcher_accepts_exact_open_rules_without_optional_comment(self):
+        state = {'uplink': 'eth0', 'root_sources': ['10.20.0.1/32'],
+                 'forward_sources': []}
+        profile = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                   'resolver_ipv4': '10.77.0.1'}
+        listed = manager_table_fixture(opened=True, state=state, profile=profile)
+        listed['nftables'][0]['table'].pop('comment')
+        with patch.object(manager, 'list_table', return_value=listed):
+            self.assertTrue(manager.manager_table_matches(
+                'owned', opened=True, state=state, profile=profile))
+
+    def test_guard_failure_uses_boot_only_emergency_fallback(self):
+        class FakeManager:
+            def __init__(self, _args):
+                self.s = {}
+                self.checks = []
+                self.close_requested = False
+                self.dirty = True
+                self.safe_closed = False
+                self.boot_only = None
+
+            def boot_guard(self):
+                raise manager.Blocked('guard failed')
+
+            def emergency_deny(self, boot_only=False):
+                self.boot_only = boot_only
+
+            def event(self, action, outcome, message):
+                return {'action': action, 'outcome': outcome, 'message': message}
+
+        fake = None
+
+        def construct(args):
+            nonlocal fake
+            fake = FakeManager(args)
+            return fake
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(manager, 'STATE', Path(folder)), \
+                patch.object(manager, 'private_path'), \
+                patch.object(manager, 'Manager', side_effect=construct), \
+                patch.object(manager.sys, 'platform', 'linux'), \
+                patch.object(manager.os, 'geteuid', return_value=0), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(manager.main(['guard']), 2)
+        self.assertIsNotNone(fake)
+        self.assertTrue(fake.boot_only)
+
+    def test_distro_config_boot_guard_installs_static_deny_without_profile(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
+        instance.load = Mock(side_effect=AssertionError('private profile read'))
+        instance.event = Mock(return_value={'outcome': 'succeeded'})
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                patch.object(manager, 'command') as command:
+            instance.boot_guard()
+        instance.load.assert_not_called()
+        command.assert_not_called()
+
+    def test_distro_config_boot_guard_preserves_manager_or_static_table(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
+        instance.event = Mock(return_value={'outcome': 'succeeded'})
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                patch.object(manager, 'command') as command:
+            instance.boot_guard()
+        command.assert_not_called()
+
+    def test_distro_config_unknown_table_gets_independent_emergency_deny(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
+        instance.event = Mock(return_value={'outcome': 'blocked'})
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'ensure_static_boot_guard', return_value='unknown'), \
+                patch.object(manager, 'ensure_boot_emergency_deny') as emergency:
+            result = instance.boot_guard()
+        emergency.assert_called_once_with()
+        self.assertEqual(result['outcome'], 'blocked')
+
+    def test_ensure_static_guard_handles_concurrent_create(self):
+        with patch.object(manager, 'list_table', return_value={'nftables': []}), \
+                patch.object(manager, 'command', side_effect=RuntimeError('File exists')), \
+                patch.object(manager, 'static_boot_matches', return_value=True):
+            self.assertEqual(manager.ensure_static_boot_guard(), 'static')
+
+    def test_manager_requires_exact_static_boot_table_for_adoption(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'owner': 'owned'}
+        with patch.object(manager, 'table_hash', return_value='static'), \
+                patch.object(manager, 'static_boot_matches', return_value=True), \
+                patch.object(manager, 'manager_table_matches', return_value=False), \
+                patch.object(manager, 'command') as command:
+            self.assertTrue(instance.adopt_static_boot_table())
+        command.assert_not_called()
+        with patch.object(manager, 'table_hash', return_value='foreign'), \
+                patch.object(manager, 'static_boot_matches', return_value=False), \
+                patch.object(manager, 'manager_table_matches', return_value=False), \
+                patch.object(manager, 'command') as command:
+            with self.assertRaisesRegex(manager.Blocked, 'preserving'):
+                instance.adopt_static_boot_table()
+        command.assert_not_called()
+
+    def test_manager_retains_a_valid_existing_manager_table(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'owner': 'owned'}
+        with patch.object(manager, 'table_hash', return_value='owned'), \
+                patch.object(manager, 'static_boot_matches', return_value=False), \
+                patch.object(manager, 'manager_table_matches', return_value=True):
+            self.assertFalse(instance.adopt_static_boot_table())
+
+    def test_distro_config_boot_guard_accepts_a_valid_shared_manager_table(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
+        instance.load = Mock(side_effect=AssertionError('private profile read'))
+        instance.event = Mock(return_value={'outcome': 'succeeded'})
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'ensure_static_boot_guard', return_value='manager'), \
+                patch.object(manager, 'ensure_boot_emergency_deny') as emergency:
+            instance.boot_guard()
+        instance.load.assert_not_called()
+        emergency.assert_not_called()
+
+    def test_distro_config_unknown_table_preserves_it_and_installs_emergency(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
+        instance.event = Mock(return_value={'outcome': 'blocked'})
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'ensure_static_boot_guard', return_value='unknown'), \
+                patch.object(manager, 'ensure_boot_emergency_deny') as emergency, \
+                patch.object(manager, 'command') as command:
+            result = instance.boot_guard()
+        emergency.assert_called_once_with()
+        command.assert_not_called()
+        self.assertEqual(result['outcome'], 'blocked')
+
+    def test_boot_emergency_is_idempotent_and_refuses_name_collision(self):
+        with patch.object(manager, 'list_table', return_value={'nftables': []}), \
+                patch.object(manager, 'boot_emergency_matches', return_value=True), \
+                patch.object(manager, 'command') as command:
+            self.assertFalse(manager.ensure_boot_emergency_deny())
+        command.assert_not_called()
+        with patch.object(manager, 'list_table', return_value={'nftables': []}), \
+                patch.object(manager, 'boot_emergency_matches', return_value=False), \
+                patch.object(manager, 'command') as command:
+            with self.assertRaises(manager.Blocked):
+                manager.ensure_boot_emergency_deny()
+        command.assert_not_called()
+
+    def test_boot_emergency_create_race_accepts_only_exact_table(self):
+        with patch.object(manager, 'list_table', side_effect=[None, {'nftables': []}]), \
+                patch.object(manager, 'command', side_effect=RuntimeError('File exists')), \
+                patch.object(manager, 'boot_emergency_matches', return_value=True):
+            self.assertFalse(manager.ensure_boot_emergency_deny())
+
+    def test_manager_replaces_static_guard_atomically(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'owner': 'owned', 'tables': {}}
+        instance.save = Mock()
+        instance.root_rules = Mock(return_value='table inet cor_egress_guard {}\n')
+        with patch.object(manager, 'table_hash', side_effect=['static', 'manager', 'manager']), \
+                patch.object(manager, 'manager_table_matches', return_value=False), \
+                patch.object(manager, 'static_boot_matches', return_value=True), \
+                patch.object(manager, 'command') as command:
+            instance.install_manager_after_boot_guard()
+        command.assert_called_once_with(
+            ['nft', '-f', '-'],
+            data=('delete table inet cor_egress_guard\n' +
+                  'table inet cor_egress_guard {}\n').encode())
+
+    def test_running_manager_is_closed_before_guarded_phase(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'owner': 'owned', 'phase': 'Running', 'tables': {}}
+        instance.p = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                      'resolver_ipv4': '10.77.0.1'}
+        instance.save = Mock()
+        instance.root_rules = Mock(return_value='closed-rules')
+        instance.replace_table = Mock()
+        with patch.object(manager, 'table_hash', return_value='manager'), \
+                patch.object(manager, 'manager_table_matches', return_value=True):
+            instance.install_manager_after_boot_guard()
+        instance.replace_table.assert_called_once_with('closed-rules')
+        self.assertEqual(instance.s['phase'], 'Guarded')
+
+    def test_unknown_table_never_gets_overwritten(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'owner': 'owned', 'tables': {}}
+        instance.save = Mock()
+        instance.root_rules = Mock(return_value='replacement')
+        with patch.object(manager, 'table_hash', return_value='unknown'), \
+                patch.object(manager, 'manager_table_matches', return_value=False), \
+                patch.object(manager, 'static_boot_matches', return_value=False), \
+                patch.object(manager, 'command') as command:
+            with self.assertRaisesRegex(manager.Blocked, 'preserving'):
+                instance.install_manager_after_boot_guard()
+        command.assert_not_called()
+
+    def test_static_boot_rules_have_owned_comment_and_drop_chains(self):
+        rules = manager.static_boot_rules()
+        self.assertIn('comment "cor-egress-boot-v1"', rules)
+        self.assertIn('chain output', rules)
+        self.assertIn('chain forward', rules)
+        self.assertEqual(rules.count('policy drop'), 2)
+        self.assertEqual(rules.count('counter drop'), 4)
+
+    def test_boot_guard_checks_profile_identity_before_reconciliation(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'role': 'manager', 'phase': 'Guarded'}
+        instance.load = Mock(side_effect=manager.Blocked('profile drift'))
+        instance.boot_reconcile = Mock()
+        instance.replace_table = Mock()
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                self.assertRaises(manager.Blocked):
+            instance.boot_guard()
+        instance.boot_reconcile.assert_not_called()
+        instance.replace_table.assert_not_called()
+
+    def test_boot_guard_establishes_static_deny_before_profile_load(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'role': 'manager', 'phase': 'Guarded'}
+        calls = []
+        instance.load = Mock(side_effect=lambda: calls.append('profile') or
+                             (_ for _ in ()).throw(manager.Blocked('profile drift')))
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'ensure_static_boot_guard',
+                          side_effect=lambda: calls.append('static') or 'static'), \
+                self.assertRaises(manager.Blocked):
+            instance.boot_guard()
+        self.assertEqual(calls, ['static', 'profile'])
+
+    def test_boot_reconcile_accepts_static_or_manager_guard_in_new_namespace(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'phase': 'Guarded', 'role': 'manager', 'root_namespace': 'old',
+                      'boot_id': 'old', 'namespaces': {}, 'tables': {}}
+        instance.policy_routes = Mock(return_value=[])
+        instance.save = Mock()
+        instance.s = {'phase': 'Guarded', 'role': 'manager', 'root_namespace': 'old',
+                      'boot_id': 'old', 'namespaces': {}, 'tables': {}}
+        with patch.object(manager.os, 'readlink', return_value='new'), \
+                patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager.Path, 'exists', return_value=False), \
+                patch.object(manager.Path, 'is_symlink', return_value=False), \
+                patch.object(manager, 'json_command', side_effect=[[], []]), \
+                patch.object(manager, 'table_hash', return_value='static'), \
+                patch.object(manager, 'table_classification', return_value='static'), \
+                patch.object(manager, 'list_table', return_value=None):
+            instance.boot_reconcile()
+        instance.save.assert_called_once_with()
+        instance.s = {'phase': 'Guarded', 'role': 'manager', 'root_namespace': 'old',
+                      'boot_id': 'old', 'namespaces': {}, 'tables': {}}
+        with patch.object(manager.os, 'readlink', return_value='new'), \
+                patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager.Path, 'exists', return_value=False), \
+                patch.object(manager.Path, 'is_symlink', return_value=False), \
+                patch.object(manager, 'json_command', side_effect=[[], []]), \
+                patch.object(manager, 'table_hash', return_value='manager'), \
+                patch.object(manager, 'table_classification', return_value='manager'), \
+                patch.object(manager, 'list_table', return_value=None):
+            instance.boot_reconcile()
+        instance.s = {'phase': 'Guarded', 'role': 'manager', 'root_namespace': 'old',
+                      'boot_id': 'old', 'namespaces': {}, 'tables': {}}
+        with patch.object(manager.os, 'readlink', return_value='new'), \
+                patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager.Path, 'exists', return_value=False), \
+                patch.object(manager.Path, 'is_symlink', return_value=False), \
+                patch.object(manager, 'json_command', side_effect=[[], []]), \
+                patch.object(manager, 'table_hash', return_value='unknown'), \
+                patch.object(manager, 'table_classification', return_value='unknown'), \
+                patch.object(manager, 'list_table', return_value=None):
+            with self.assertRaises(manager.Blocked):
+                instance.boot_reconcile()
+
+    def test_static_matcher_rejects_swapped_hooks_and_wrong_policy(self):
+        base = {'nftables': [
+            {'table': {'family': 'inet', 'name': manager.TABLE,
+                       'comment': manager.STATIC_BOOT_COMMENT}},
+            {'chain': {'name': 'output', 'type': 'filter', 'hook': 'forward',
+                       'prio': -150, 'policy': 'drop'}},
+            {'chain': {'name': 'forward', 'type': 'filter', 'hook': 'output',
+                       'prio': -150, 'policy': 'drop'}},
+        ]}
+        with patch.object(manager, 'list_table', return_value=base):
+            self.assertFalse(manager.static_boot_matches())
+
+    def test_manager_matcher_rejects_unknown_base_chain(self):
+        listed = {'nftables': [
+            {'table': {'family': 'inet', 'name': manager.TABLE,
+                       'comment': 'cor-egress:owned'}},
+            {'chain': {'name': 'output', 'type': 'filter', 'hook': 'output',
+                       'prio': -150, 'policy': 'drop'}},
+            {'chain': {'name': 'forward', 'type': 'filter', 'hook': 'forward',
+                       'prio': -150, 'policy': 'drop'}},
+            {'chain': {'name': 'foreign', 'type': 'filter', 'hook': 'prerouting',
+                       'prio': -150, 'policy': 'accept'}},
+        ]}
+        with patch.object(manager, 'list_table', return_value=listed):
+            self.assertFalse(manager.manager_table_matches('owned'))
+
     def test_sandbox_staging_remains_traversable_under_private_umask(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(manager, 'private_path'):
             before = os.umask(0o077)

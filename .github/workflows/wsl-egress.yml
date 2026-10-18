@@ -60,7 +60,11 @@ jobs:
           persist-credentials: false
       - name: Offline host policy tests
         shell: powershell
-        run: ./scripts/wsl-secure-egress/tests/windows-unit.ps1
+        run: |
+          ./scripts/wsl-secure-egress/tests/windows-unit.ps1
+          ./scripts/wsl-secure-egress/tests/elevation-unit.ps1
+          ./scripts/wsl-secure-egress/tests/windows-workflow.ps1
+          ./scripts/wsl-secure-egress/tests/package-upgrade-unit.ps1
       - name: Real WFP IPv4/IPv6 TCP/UDP loopback test
         shell: powershell
         run: ./scripts/wsl-secure-egress/tests/windows-wfp.ps1 -ExecuteIsolated | Out-File -Encoding utf8 windows-wsl-egress-results.json

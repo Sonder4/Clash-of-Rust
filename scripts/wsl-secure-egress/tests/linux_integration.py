@@ -752,7 +752,40 @@ table inet cor_fixture_observe {
             require(any(chain.get("hook") == hook and chain.get("policy") == "drop" for chain in chains),
                     f"shared guard missing default-drop {hook} chain")
 
+    def manager_rule_compatibility(self):
+        """Compare independent kernel JSON against the manager's ownership matcher."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cor_kernel_rules", MANAGER)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        instance = object.__new__(module.Manager)
+        instance.p = dict(endpoint_ipv4=ENDPOINT, endpoint_port=51820,
+                          resolver_ipv4=RESOLVER)
+        for label, opened, sources, forwards in (
+            ("closed", False, ["192.0.2.1/32"], []),
+            ("open-single", True, ["192.0.2.1/32"], []),
+            ("open-multiple-bridge", True, ["192.0.2.1/32", "10.20.0.1/32"],
+             [dict(interface="fixture0", source_cidr="172.29.77.0/24")]),
+        ):
+            instance.s = dict(owner="kernel-fixture", uplink="fixture0",
+                              root_sources=sources, forward_sources=forwards)
+            command(["nft", "-f", "-"], input=instance.root_rules(opened))
+            try:
+                matches = module.manager_table_matches(
+                    "kernel-fixture", opened=opened, state=instance.s, profile=instance.p)
+                if not matches and os.environ.get("COR_EGRESS_TEST_DEBUG") == "1":
+                    debug = command(["nft", "-j", "list", "table", "inet", GUARD],
+                                    check=False)
+                    print(json.dumps({"kernel_rule_debug": label,
+                                      "nft": json.loads(debug.stdout or "{}")}),
+                          flush=True)
+                require(matches, f"kernel {label} rules rejected by ownership matcher")
+                self.evidence.append(dict(case="kernel-rules-" + label, result="PASS"))
+            finally:
+                command(["nft", "delete", "table", "inet", GUARD])
+
     def run(self):
+        self.manager_rule_compatibility()
         # Real pre-policy controls ensure IPv6, UDP and DNS paths actually work.
         for mode in ("tcp", "udp"):
             self.positive("pre-install-" + mode, mode)

@@ -15,8 +15,12 @@
 
 ## Install
 
-Run **执行安装** from an administrator terminal using the reviewed command
-shown by the client. Installation performs these operations in order:
+Choose the local private JSON profile, run the installation preflight, then
+click **执行安装**. The installed client requests Windows UAC for the current
+user. Approve that Windows prompt to run the fixed installed broker. Doctor,
+status and preflight do not elevate or start stopped distributions. A different
+administrator account is rejected because WSL registrations belong to the
+original user. Installation performs these operations in order:
 
 - validate the private profile and fixed endpoint;
 - record the immediate Hyper-V and Docker object snapshots;
@@ -29,9 +33,11 @@ shown by the client. Installation performs these operations in order:
   resolver settings;
 - audit the effective scope while the Windows boundary remains closed.
 
-Failure leaves the outer boundary closed where it was installed. Do not rerun
-installation over an existing journal. Inspect `%ProgramData%\ClashOfRust\WslEgress`
-and use the reviewed recovery path.
+Failure leaves the outer boundary closed where it was installed. An already
+installed generation is inspected rather than overwritten; its original
+snapshots remain the rollback source. A conflicting configuration is rejected.
+Inspect `%ProgramData%\ClashOfRust\WslEgress` and the displayed recovery advice
+before retrying a failed transaction.
 
 ## Connect and verify
 
@@ -39,14 +45,28 @@ and use the reviewed recovery path.
 Linux manager, creates the WireGuard namespaces and policy routes, and only then
 enables the exact Windows endpoint. Enabling and verification are one
 compensated transaction: a failed post-enable check closes the endpoint again.
+An existing installation uses its protected profile, so reconnecting does not
+require re-entering keys or selecting the original private profile.
+
+Start also registers a fixed Task Scheduler action for the installation owner,
+using an interactive user token with the highest granted privileges. Once a
+minute, the task audits the effective Windows policy and running distributions
+and refreshes the Linux assertion only on success. It never runs user WSL as
+SYSTEM, starts a stopped distribution, opens an endpoint or extends the
+five-minute proof lifetime. Renewal failures close the endpoint and retain a
+failure receipt. Stop removes only the exactly matching owned task.
 
 **断开 · 留保护** closes the Windows endpoint before stopping Linux transport
 objects. The shared deny guard remains. Closing the GUI does not remove
 protection.
 
-The Test action inspects local invariants only. Cold boot, sleep/resume, network
-switch, actual German geolocation and real receiver-source evidence require
-separate executed tests and must not be inferred from a successful connection.
+The Test action requests UAC and runs real, bounded probes through the strict
+launcher: IPv4 source and German geolocation, verified HTTPS, IPv6 refusal,
+virtual interface visibility, hidden host mounts and a clean proxy environment.
+A recent WireGuard handshake and successful probes are required to report a
+working connection. DNS packet-path evidence, cold boot, sleep/resume, physical
+network switch and controlled receiver-source evidence remain separate tests.
+The UI preserves their NOT_RUN results.
 
 ## Logs and evidence
 
@@ -54,6 +74,28 @@ The UI displays bounded, redacted reports. Runtime state and snapshots live
 under `%ProgramData%\ClashOfRust\WslEgress`; completion receipts live under
 `%LOCALAPPDATA%\ClashOfRust\WslEgress\results`. Never attach private profiles,
 WireGuard keys or raw packet captures to an upstream issue.
+
+Cancelled UAC means the request was not sent. An operation timeout after the
+request was sent means its outcome is unknown; refresh status before retrying.
+The client does not kill an elevated firewall transaction on that timeout.
+The displayed administrator command remains a manual recovery option.
+
+## Updating an installed client
+
+Updates stage the complete package, verify its file set and hashes, then create
+a code-only write-ahead recovery journal. An active WSL endpoint is closed and
+its Linux transport stopped before resources are replaced; active isolated
+workloads block that operation. The existing Windows Network service and core
+remain running. The canonical guardian image path is preserved, including an
+installation using the separate Program Files helper package.
+
+Windows code and the Linux payload are upgraded together. A failed update
+restores only recorded package files and the prior Linux payload; it retains
+the closed network boundary. The code recovery set is kept under the installed
+application's `.package-update` directory. This recovery set contains no
+private profiles or network snapshots. Reconnect through the updated client
+after the update has committed. A live Windows core upgrade is a separate
+operation and is not performed by this WSL update transaction.
 
 Use only disposable runners for kernel tests:
 

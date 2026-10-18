@@ -109,7 +109,7 @@ if 'Status: active' in run(['ufw','status']).decode():
         if 'Skipping' in result: raise ValueError('Unowned equivalent UFW rule preserved; review required')
         record['ufw_added'].append(rule); record.pop('ufw_pending',None); save()
 run(['systemctl','daemon-reload'])
-record['service_was_active']='active' in run(['systemctl','is-active','cor-wsl-egress.service'],False).decode()
+record['service_was_active']=subprocess.run(['systemctl','is-active','--quiet','cor-wsl-egress.service'],env=env).returncode==0
 save()
 run(['systemctl','enable','--now','cor-wsl-egress.service'])
 state=json.loads((root/'state.json').read_text())

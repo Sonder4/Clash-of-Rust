@@ -80,15 +80,37 @@ generation N stable across start/stop**. A mismatch blocks the action.
    `/etc/wsl.conf` (disable generated resolver, generated hosts and Windows
    interop), `/etc/resolv.conf` (fixed tunnel resolver) and `/etc/hosts`
    (loopback only), with snapshots and CAS restoration.
-   It creates no WireGuard device and no shared firewall. Windows owns distro
-   enumeration, shutdown/restart, `.wslconfig` DNS tunneling, and effective audit.
-4. Manager install sets `[boot] command=/usr/local/lib/cor-egress/manager guard`.
-   An existing different boot command is refused, not overwritten. Boot `guard`
-   only installs/reinstates deny policy and never opens an endpoint. WSL boot
-   hooks alone are **not** evidence of no pre-hook traffic: Windows persistence
-   and effective policy remain external prerequisites. Cold-start acceptance
-   stays NOT_RUN until separately tested; the prototype may prepare a connected
-   but Unverified backend before that acceptance is complete.
+   Every configured distribution writes the same fixed root-owned boot guard.
+   A `distro-config` hook may create only the exact static shared deny table
+   when it starts first; it never creates WireGuard devices or routes. If the
+   shared table is a valid manager table it is retained. If it is unknown, the
+   original table is preserved and a separate
+   `cor_egress_boot_emergency` output/forward deny table is installed before
+   the hook returns Blocked. An existing emergency table, whether its shape
+   is recognized or conflicting, is preserved and causes every managed boot
+   hook to return Blocked until explicit recovery. Windows still owns distro enumeration,
+   shutdown/restart, `.wslconfig` DNS tunneling, and effective audit.
+4. Every managed distribution sets
+   `[boot] command=/usr/local/lib/cor-egress/manager guard` through the fixed
+   root-owned wrapper. An existing
+   different boot command is refused, not overwritten. Boot `guard` establishes
+   the exact static deny before manager profile loading and never opens an
+   endpoint. The manager may adopt that exact static table and replace it with
+   its owned table in one nft transaction; a valid manager table is retained,
+   and unknown drift is preserved while an independent emergency deny is
+   installed. WSL boot hooks alone are **not** evidence of no pre-hook traffic:
+   Windows persistence and effective policy remain external prerequisites.
+   `guard` establishes the static deny before loading the private profile.
+   Concurrent first starts may race on table creation; the loser re-reads the
+   table and accepts only the exact static or locally verified manager shape.
+   WSL 1.0.2 can omit table comments in nft JSON output, so exact rule content,
+   chain hooks, priorities and drop policies are checked as well. The emergency
+   table is retained; it is never silently deleted by boot reconciliation.
+   Windows must close its endpoint exception before a WSL VM restart because a
+   Linux boot hook cannot prove absence of traffic before the hook runs.
+   Cold-start acceptance stays NOT_RUN until separately tested; the prototype
+   may prepare a connected but Unverified backend before that acceptance is
+   complete.
 5. `start --generation N` consumes fresh root-supplied scope attestation stdin,
    or accepts `--scope-attestation /root/private-scope.json`. Schema:
 
@@ -141,6 +163,15 @@ generation N stable across start/stop**. A mismatch blocks the action.
    capabilities are dropped before execution. Stdio must be a pipe, TTY or
    `/dev/null`, preventing host descriptor paths via `/proc/self/fd`. Workload
    stdout stays stdout; the final status JSON is on stderr for this action only.
+   Each launch requires a current Windows scope assertion no older than five
+   minutes, including when it reuses the stored assertion. A stale assertion
+   blocks a new launch; an already running workload retains its enforced
+   namespace and firewall boundary.
+   `attest --generation N` accepts a replacement assertion on stdin only while
+   the owned tunnel is Running and its current rules, interfaces, distro files
+   and disabled interop pass inspection. The root caller must obtain a new
+   effective Windows audit. Invalid, stale or mismatched assertions never
+   replace the existing proof. Renewal changes no routes or firewall permits.
 7. `stop --generation N` first closes the root transport exception, then deletes
    only owned namespaces/veth. If workloads remain, it retains namespaces and
    reports Blocked; business and outer paths are already denied. The management
@@ -196,7 +227,7 @@ all reserved object names are absent; collisions remain Blocked.
 
 ## Isolated CI entry points
 
-Portable evidence/gate checks (21 tests, no subprocess or socket is executed):
+Portable evidence/gate checks (no subprocess or socket is executed):
 
 ```text
 python -B scripts/wsl-secure-egress/tests/linux_static_test.py

@@ -28,6 +28,9 @@ import struct
 STATE = Path('/var/lib/cor-egress')
 PROFILE = Path('/etc/cor-egress/profile.json')
 TABLE = 'cor_egress_guard'
+STATIC_BOOT_COMMENT = 'cor-egress-boot-v1'
+BOOT_EMERGENCY = 'cor_egress_boot_emergency'
+BOOT_EMERGENCY_COMMENT = 'cor-egress-boot-emergency-v1'
 GW = 'cor-egress-gw'
 TRANSPORT = 'cor-egress-transport'
 ROOT_IF = 'cor-et0'
@@ -319,6 +322,363 @@ def table_hash(ns=None):
     return digest(encode(clean_nft(json.loads(r.stdout))))
 
 
+def list_table(name):
+    result = command(['nft', '-j', 'list', 'table', 'inet', name], okay=True)
+    if result.returncode:
+        if result.returncode == 1 and b'No such file or directory' in result.stderr:
+            return None
+        raise Blocked('Unable to inspect an nftables table safely.')
+    return clean_nft(json.loads(result.stdout))
+
+
+def table_items(name):
+    """Return a table's objects, or None only when nft proved it absent."""
+    listed = list_table(name)
+    if listed is None:
+        return None
+    return listed.get('nftables', [])
+
+
+def table_classification(name):
+    """Classify the shared guard without ever mutating an unknown table."""
+    if list_table(name) is None:
+        return 'absent'
+    if name == TABLE and static_boot_matches():
+        return 'static'
+    if name == TABLE and manager_table_matches_installed():
+        return 'manager'
+    return 'unknown'
+
+
+def canonical_rule(expr):
+    """Drop volatile counters so semantically identical rules compare equal."""
+    return json.loads(json.dumps(clean_nft(expr), sort_keys=True))
+
+
+def static_boot_rules():
+    return f'''table inet {TABLE} {{
+      comment "{STATIC_BOOT_COMMENT}"
+      chain output {{ type filter hook output priority -150; policy drop;
+        meta nfproto ipv6 counter drop;
+        oifname "lo" ip saddr 127.0.0.0/8 ip daddr 127.0.0.0/8 counter accept;
+        counter drop; }}
+      chain forward {{ type filter hook forward priority -150; policy drop;
+        meta nfproto ipv6 counter drop;
+        counter drop; }}
+    }}\n'''
+
+
+def static_boot_matches():
+    items = table_items(TABLE)
+    if items is None:
+        return False
+    table = next((x.get('table') for x in items if 'table' in x), None)
+    chains = {x['chain']['name']: x['chain'] for x in items if 'chain' in x}
+    rules = [x['rule'] for x in items if 'rule' in x]
+    if not table or table.get('family') != 'inet' or table.get('name') != TABLE:
+        return False
+    # Linux 5.15/WSL's nft 1.0.2 does not include table comments in JSON output,
+    # even though it accepts and stores them. The exact canonical rule set below
+    # still distinguishes this guard from every other known table shape.
+    if table.get('comment') not in (None, STATIC_BOOT_COMMENT):
+        return False
+    if set(chains) != {'output', 'forward'}:
+        return False
+    if chains['output'].get('type') != 'filter' or chains['output'].get('hook') != 'output' or \
+            chains['output'].get('prio') != -150 or chains['output'].get('policy') != 'drop' or \
+            chains['forward'].get('type') != 'filter' or chains['forward'].get('hook') != 'forward' or \
+            chains['forward'].get('prio') != -150 or chains['forward'].get('policy') != 'drop':
+        return False
+    if len(rules) != 5 or any(set(rule) - {'family', 'table', 'chain', 'expr', 'handle'} for rule in rules):
+        return False
+    actions = [(rule.get('chain'), canonical_rule(rule.get('expr', []))) for rule in rules]
+    output = [expr for chain, expr in actions if chain == 'output']
+    forward = [expr for chain, expr in actions if chain == 'forward']
+    if len(output) != 3 or len(forward) != 2:
+        return False
+    # nft JSON can emit anonymous counters as {} or with numeric fields, and
+    # older WSL versions omit table comments. Canonicalize both volatile forms
+    # while requiring every selector, hook, policy and action exactly.
+    def canonical(expressions):
+        result = []
+        for expression in expressions:
+            result.append([{'counter': {}} if 'counter' in item else item
+                           for item in expression])
+        return result
+    output = canonical(output)
+    forward = canonical(forward)
+    expected_output = [
+        [{'match': {'op': '==', 'left': {'meta': {'key': 'nfproto'}},
+                    'right': 'ipv6'}}, {'counter': {}}, {'drop': None}],
+        [{'match': {'op': '==', 'left': {'meta': {'key': 'oifname'}},
+                    'right': 'lo'}},
+         {'match': {'op': '==', 'left': {'payload': {'protocol': 'ip', 'field': 'saddr'}},
+                    'right': {'prefix': {'addr': '127.0.0.0', 'len': 8}}}},
+         {'match': {'op': '==', 'left': {'payload': {'protocol': 'ip', 'field': 'daddr'}},
+                    'right': {'prefix': {'addr': '127.0.0.0', 'len': 8}}}},
+         {'counter': {}}, {'accept': None}],
+        [{'counter': {}}, {'drop': None}],
+    ]
+    expected_forward = [
+        [{'match': {'op': '==', 'left': {'meta': {'key': 'nfproto'}},
+                    'right': 'ipv6'}}, {'counter': {}}, {'drop': None}],
+        [{'counter': {}}, {'drop': None}],
+    ]
+    return output == expected_output and forward == expected_forward
+
+
+def boot_emergency_rules():
+    return f'''table inet {BOOT_EMERGENCY} {{
+      comment "{BOOT_EMERGENCY_COMMENT}"
+      chain output {{ type filter hook output priority -200; policy drop; counter drop; }}
+      chain forward {{ type filter hook forward priority -200; policy drop; counter drop; }}
+    }}\n'''
+
+
+def boot_emergency_matches():
+    items = table_items(BOOT_EMERGENCY)
+    if items is None:
+        return False
+    table = next((x.get('table') for x in items if 'table' in x), None)
+    chains = {x['chain']['name']: x['chain'] for x in items if 'chain' in x}
+    rules = [x['rule'] for x in items if 'rule' in x]
+    if not table or table.get('family') != 'inet' or table.get('name') != BOOT_EMERGENCY or \
+            table.get('comment') not in (None, BOOT_EMERGENCY_COMMENT):
+        return False
+    if (set(chains) != {'output', 'forward'} or len(rules) != 2 or
+            any(set(rule) - {'family', 'table', 'chain', 'expr', 'handle'} for rule in rules)):
+        return False
+    for name, hook in (('output', 'output'), ('forward', 'forward')):
+        chain = chains[name]
+        if chain.get('type') != 'filter' or chain.get('hook') != hook or \
+                chain.get('prio') != -200 or chain.get('policy') != 'drop':
+            return False
+        matching = [x.get('expr', []) for x in rules if x.get('chain') == name]
+        expected = [[{'counter': {}}, {'drop': None}]]
+        normalized = []
+        for expression in matching:
+            normalized.append([{'counter': {}} if 'counter' in item else item
+                               for item in expression])
+        if normalized != expected:
+            return False
+    return True
+
+
+def ensure_boot_emergency_deny():
+    """Install a fixed fail-closed table without touching the guard table."""
+    present = list_table(BOOT_EMERGENCY)
+    if present is not None:
+        if not boot_emergency_matches():
+            raise Blocked('Boot emergency table name collision; Windows deny must remain active.')
+        return False
+    try:
+        command(['nft', '-f', '-'], data=boot_emergency_rules().encode())
+    except Exception:
+        # A concurrent distro may have won the create race.
+        if not boot_emergency_matches():
+            raise
+        return False
+    if not boot_emergency_matches():
+        raise Blocked('Boot emergency deny could not be verified.')
+    return True
+
+
+def ensure_static_boot_guard():
+    """Return the shared guard's exact classification, creating only our table."""
+    state = table_classification(TABLE)
+    if state == 'absent':
+        try:
+            command(['nft', '-f', '-'], data=static_boot_rules().encode())
+        except Exception:
+            # Another distro may have won the create race. Re-read and accept
+            # only a proven static or manager table.
+            state = table_classification(TABLE)
+            if state == 'absent':
+                raise
+        state = table_classification(TABLE)
+    if state in ('static', 'manager'):
+        return state
+    return 'unknown'
+
+
+def manager_rule_expressions(state=None, profile=None):
+    """Expected nft JSON for root_rules; only kernel counters are volatile."""
+    def match(left, right, op='=='):
+        return {'match': {'op': op, 'left': left, 'right': right}}
+
+    def meta(key, value):
+        return match({'meta': {'key': key}}, value)
+
+    def payload(protocol, field, value, op='=='):
+        return match({'payload': {'protocol': protocol, 'field': field}}, value, op)
+
+    def address(cidr):
+        network = ipaddress.IPv4Network(cidr, strict=True)
+        if network.prefixlen == 32:
+            return str(network.network_address)
+        return {'prefix': {'addr': str(network.network_address), 'len': network.prefixlen}}
+
+    def ct(value):
+        return match({'ct': {'key': 'state'}}, value, 'in')
+
+    def rule(selectors, verdict='accept', counter=True):
+        return selectors + ([{'counter': {}}] if counter else []) + [{verdict: None}]
+
+    ipv6 = rule([meta('nfproto', 'ipv6')], 'drop')
+    loopback = rule([meta('oifname', 'lo'),
+                     payload('ip', 'saddr', address('127.0.0.0/8')),
+                     payload('ip', 'daddr', address('127.0.0.0/8'))])
+    output, forward = [ipv6, loopback], [ipv6]
+    expected = {'output': output, 'forward': forward}
+    if state is not None and profile is not None:
+        up = state['uplink']
+        endpoint = str(ipaddress.IPv4Address(profile['endpoint_ipv4']))
+        resolver = str(ipaddress.IPv4Address(profile['resolver_ipv4']))
+        port = profile['endpoint_port']
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError('Invalid endpoint port')
+        # nft serializes anonymous sets in canonical network order, which can
+        # differ from the order persisted in the state journal. Normalize the
+        # values before building the exact expected expressions so ownership
+        # checks remain deterministic without accepting extra members.
+        networks = [ipaddress.IPv4Network(value, strict=True)
+                    for value in state['root_sources']]
+        networks.sort(key=lambda network: (int(network.network_address),
+                                           network.prefixlen))
+        sources = [address(str(network)) for network in networks]
+        if not sources:
+            raise ValueError('Missing root sources')
+        # nft collapses a singleton anonymous set into a single expression.
+        sources = sources[0] if len(sources) == 1 else {'set': sources}
+        source = payload('ip', 'saddr', sources)
+        output.append(rule([meta('oifname', 'lo'), source, payload('ip', 'daddr', sources)]))
+        for protocol in ('udp', 'tcp'):
+            output.append(rule([meta('oifname', BUS_IF), source,
+                                payload('ip', 'daddr', resolver, '!='),
+                                payload(protocol, 'dport', 53)], 'drop'))
+        output.append(rule([meta('oifname', BUS_IF), source]))
+        endpoint_selectors = [meta('iifname', ROOT_IF), meta('oifname', up),
+                              payload('ip', 'saddr', TRANSPORT_IP),
+                              payload('ip', 'daddr', endpoint),
+                              payload('udp', 'sport', WG_PORT), payload('udp', 'dport', port)]
+        forward.append(rule(endpoint_selectors))
+        forward.append(rule([meta('iifname', up), meta('oifname', ROOT_IF),
+                             payload('ip', 'saddr', endpoint), payload('ip', 'daddr', TRANSPORT_IP),
+                             payload('udp', 'sport', port), payload('udp', 'dport', WG_PORT),
+                             ct('established')]))
+        icmp = [payload('icmp', 'type', 'destination-unreachable'),
+                payload('icmp', 'code', 'frag-needed'), ct('related')]
+        forward.append(rule([meta('iifname', up), meta('oifname', ROOT_IF),
+                             payload('ip', 'daddr', TRANSPORT_IP)] + icmp + [
+                                 match({'ct': {'key': 'ip saddr', 'dir': 'original'}}, TRANSPORT_IP),
+                                 match({'ct': {'key': 'ip daddr', 'dir': 'original'}}, endpoint)]))
+        for item in state.get('forward_sources', []):
+            iface, cidr = item['interface'], address(item['source_cidr'])
+            output.append(rule([meta('oifname', iface), source, payload('ip', 'daddr', cidr)] + icmp))
+            ingress = [meta('iifname', iface), meta('oifname', BUS_IF), payload('ip', 'saddr', cidr)]
+            for protocol in ('udp', 'tcp'):
+                forward.append(rule(ingress + [payload('ip', 'daddr', resolver, '!='),
+                                                payload(protocol, 'dport', 53)], 'drop'))
+            forward.append(rule(ingress))
+            forward.append(rule([meta('iifname', BUS_IF), meta('oifname', iface),
+                                 payload('ip', 'daddr', cidr), ct(['established', 'related'])]))
+        expected['nat_out'] = [rule(endpoint_selectors, 'masquerade', counter=False)]
+    output.append(rule([], 'drop'))
+    forward.append(rule([], 'drop'))
+    return expected
+
+
+def manager_table_matches(owner, opened=False, state=None, profile=None):
+    """Require exactly the generated rules, including selectors, values and order."""
+    if not isinstance(owner, str) or not owner:
+        return False
+    if opened and (not isinstance(state, dict) or not isinstance(profile, dict)):
+        return False
+    listed = list_table(TABLE)
+    if listed is None:
+        return False
+    try:
+        expected = manager_rule_expressions(state if opened else None, profile if opened else None)
+        items = listed['nftables']
+        tables = [item['table'] for item in items if set(item) == {'table'}]
+        if len(tables) != 1:
+            return False
+        table = dict(tables[0])
+        # nft 1.0.2 omits table comments. Exact rules are still required and
+        # installed-table recognition additionally requires the private hash.
+        if (table.pop('comment', None) not in (None, 'cor-egress:' + owner) or
+                table != {'family': 'inet', 'name': TABLE}):
+            return False
+        chains, rules = {}, {name: [] for name in expected}
+        for item in items:
+            if set(item) == {'table'}:
+                continue
+            if set(item) == {'chain'}:
+                chain = dict(item['chain'])
+                name = chain.pop('name')
+                if name not in expected or name in chains:
+                    return False
+                wanted = {'family': 'inet', 'table': TABLE,
+                          'type': 'filter', 'hook': name, 'prio': -150, 'policy': 'drop'}
+                if name == 'nat_out':
+                    wanted.update(type='nat', hook='postrouting', prio=100, policy='accept')
+                if chain != wanted:
+                    return False
+                chains[name] = chain
+            elif set(item) == {'rule'}:
+                rule = dict(item['rule'])
+                name, expression = rule.pop('chain'), rule.pop('expr')
+                if name not in expected or rule != {'family': 'inet', 'table': TABLE}:
+                    return False
+                rules[name].append(expression)
+            else:
+                return False
+        return set(chains) == set(expected) and rules == expected
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def manager_table_matches_installed():
+    """Recognize only a table whose comment owner matches local private state."""
+    items = table_items(TABLE)
+    if items is None:
+        return False
+    table = next((x.get('table') for x in items if 'table' in x), None)
+    comment = table.get('comment') if table else None
+    # Older nft versions omit comments. Only the local manager can supply the
+    # owner from private state and verify the expected table hash.
+    state_path = STATE / 'state.json'
+    if not state_path.exists():
+        return False
+    try:
+        state = json.loads(private_path(state_path).read_bytes())
+    except (Blocked, ValueError, KeyError, TypeError, OSError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    owner = state.get('owner')
+    phase = state.get('phase')
+    if not isinstance(owner, str) or not owner:
+        return False
+    if comment is not None and comment != 'cor-egress:' + owner:
+        return False
+    if state.get('tables', {}).get('root') != table_hash():
+        return False
+    if phase == 'Running':
+        try:
+            profile = read_profile(state['profile'])
+        except (Blocked, KeyError, ValueError, TypeError, OSError):
+            return False
+        return manager_table_matches(owner, opened=True, state=state, profile=profile)
+    if phase in ('Guarded', 'Installing'):
+        return manager_table_matches(owner, opened=False)
+    return False
+
+
+def boot_guard_command():
+    return '/usr/local/lib/cor-egress/manager guard'
+
+
 class Manager:
     def __init__(self, args):
         self.args = args
@@ -333,12 +693,14 @@ class Manager:
     def save(self):
         atomic(self.file, encode(self.s))
 
-    def emergency_deny(self):
+    def emergency_deny(self, boot_only=False):
         """Close even if CAS refuses a drifted/incomplete main transaction.
 
         Never edit an unknown table. A separate owned table only adds denies;
         it cannot grant access or erase another owner's changes.
         """
+        if boot_only:
+            return ensure_boot_emergency_deny()
         if not self.s or self.s.get('role') == 'distro-config' or self.s.get('phase') == 'RolledBack':
             return
         name = 'cor_egress_emergency_' + self.s['owner'].replace('-', '')[:12]
@@ -363,11 +725,17 @@ class Manager:
     def boot_reconcile(self):
         if self.s.get('phase') in ('RolledBack', 'DistroRestored'):
             raise Blocked('Retired generation cannot be revived by a boot hook.')
+        if self.s.get('role') == 'distro-config':
+            # Per-distro configuration never owns the shared namespace or table.
+            # The Windows default deny remains authoritative until the manager
+            # distribution installs the shared guard.
+            return
         current = os.readlink('/proc/self/ns/net')
         if self.s['root_namespace'] == current and self.s.get('boot_id') == boot_id():
             return
         # A genuinely new root netns cannot contain old ifindices or sysctls.
-        # Refuse all same-name objects rather than adopting foreign state.
+        # The exact static first-start guard is acceptable and will be adopted
+        # by the caller. A valid manager table is also retained.
         for name in (TRANSPORT, GW):
             if (Path('/run/netns') / name).exists() or (Path('/run/netns') / name).is_symlink():
                 raise Blocked('Reboot reconciliation found a namespace collision.')
@@ -378,7 +746,11 @@ class Manager:
         if not isinstance(rules, list):
             rules = [rules]
         routes = self.policy_routes()
-        if any(x.get('priority') in RULE_PREFS for x in rules) or routes or table_hash() is not None:
+        guard = table_hash()
+        emergency = list_table(BOOT_EMERGENCY)
+        guard_class = table_classification(TABLE)
+        if any(x.get('priority') in RULE_PREFS for x in rules) or routes or (
+                guard_class not in ('absent', 'static', 'manager')) or emergency is not None:
             raise Blocked('New namespace already contains reserved policy objects; no ownership assumed.')
         self.s.setdefault('previous_boots', []).append({
             'root_namespace': self.s['root_namespace'], 'phase': self.s['phase'],
@@ -434,6 +806,41 @@ class Manager:
         self.dirty = True
         command(['nft', '-f', '-'], ns=ns, data=(prefix + rules).encode())
         self.s.setdefault('tables', {})[ns or 'root'] = table_hash(ns)
+        self.save()
+
+    def adopt_static_boot_table(self):
+        """Return whether an exact static guard must be replaced atomically."""
+        actual = table_hash()
+        if actual is None:
+            return False
+        if static_boot_matches():
+            return True
+        if manager_table_matches(self.s.get('owner'), opened=self.s.get('phase') == 'Running',
+                                 state=self.s, profile=getattr(self, 'p', None)):
+            return False
+        raise Blocked('Existing guard table is neither the exact static nor the owned manager guard; preserving it.')
+
+    def install_manager_after_boot_guard(self):
+        """Replace the static first-start guard in one nft transaction."""
+        actual = table_hash()
+        if actual is None:
+            self.replace_table(self.root_rules(), initial=True)
+            return
+        running = self.s.get('phase') == 'Running'
+        if manager_table_matches(self.s.get('owner'), opened=running,
+                                 state=self.s, profile=getattr(self, 'p', None)):
+            if running:
+                # A distro boot hook must close an existing transport before
+                # recording Guarded; WSL may have restarted only that distro.
+                self.s['phase'] = 'Guarded'
+                self.replace_table(self.root_rules())
+            return
+        if not static_boot_matches():
+            raise Blocked('Static boot guard changed before adoption; preserving it.')
+        self.dirty = True
+        command(['nft', '-f', '-'], data=(
+            'delete table inet ' + TABLE + '\n' + self.root_rules()).encode())
+        self.s.setdefault('tables', {})['root'] = table_hash()
         self.save()
 
     def root_rules(self, opened=False):
@@ -557,17 +964,21 @@ class Manager:
                     if old.lower() == key.lower():
                         parser.remove_option(section, old)
                 parser.set(section, key, value)
-        if self.s.get('role') != 'distro-config':
-            if not parser.has_section('boot'):
-                parser.add_section('boot')
-            old_values = [value.strip().strip('"') for key, value in parser.items('boot') if key.lower() == 'command']
-            guard_command = '/usr/local/lib/cor-egress/manager guard'
-            if any(old and old != guard_command for old in old_values):
-                raise Blocked('Existing WSL boot command preserved; integrate the owned boot guard explicitly before install.')
-            for key in list(parser['boot']):
-                if key.lower() == 'command':
-                    parser.remove_option('boot', key)
-            parser.set('boot', 'command', guard_command)
+        # Every managed distro can be the first one started after a WSL VM
+        # restart. Each must re-create the shared deny table before workloads
+        # run. The manager distro owns full lifecycle actions; other distros
+        # can only use the fixed, root-owned guard wrapper.
+        if not parser.has_section('boot'):
+            parser.add_section('boot')
+        old_values = [value.strip().strip('"') for key, value in parser.items('boot') if key.lower() == 'command']
+        guard_command = boot_guard_command()
+        legacy_guard_command = '/usr/local/lib/cor-egress/manager guard'
+        if any(old and old not in (guard_command, legacy_guard_command) for old in old_values):
+            raise Blocked('Existing WSL boot command preserved; integrate the owned boot guard explicitly before install.')
+        for key in list(parser['boot']):
+            if key.lower() == 'command':
+                parser.remove_option('boot', key)
+        parser.set('boot', 'command', guard_command)
         import io
         output = io.StringIO()
         parser.write(output)
@@ -631,6 +1042,18 @@ class Manager:
         result['action'] = 'repair-config'
         return result
 
+    def validate_attestation(self, att):
+        fields = ['all_distros_managed', 'hyperv_default_deny',
+                  'dns_tunneling_disabled', 'interop_disabled', 'effective_audit_passed']
+        if (not isinstance(att, dict) or att.get('schema') != 1
+                or att.get('generation') != self.s['generation']
+                or any(att.get(x) is not True for x in fields)):
+            raise Blocked('Full-WSL current effective audit or distro coverage is unproven.')
+        issued = att.get('issued_at_unix')
+        now = time.time()
+        if type(issued) not in (int, float) or not now - 300 <= issued <= now:
+            raise Blocked('Windows attestation missing or older than five minutes.')
+
     def attestation(self, stdin=False):
         path = self.args.scope_attestation or self.s.get('attestation')
         if stdin and self.args.scope_attestation is None and not sys.stdin.isatty():
@@ -638,23 +1061,40 @@ class Manager:
             if raw:
                 if len(raw) > 65536:
                     raise Blocked('Oversized scope attestation.')
+                self.validate_attestation(json.loads(raw))
                 path = STATE / 'scope-attestation.json'
                 atomic(path, raw)
         if not path:
             raise Blocked('Windows effective audit/cold-start/cross-distro attestation is required.')
         att = json.loads(private_path(path).read_bytes())
-        fields = ['all_distros_managed', 'hyperv_default_deny',
-                  'dns_tunneling_disabled', 'interop_disabled', 'effective_audit_passed']
-        if att.get('schema') != 1 or att.get('generation') != self.s['generation'] or any(att.get(x) is not True for x in fields):
-            raise Blocked('Full-WSL current effective audit or distro coverage is unproven.')
-        issued = att.get('issued_at_unix')
-        if type(issued) not in (int, float) or not 0 <= time.time() - issued <= 300:
-            raise Blocked('Windows attestation missing or older than five minutes.')
+        self.validate_attestation(att)
         self.checks.append({'name': 'windows-scope-attestation', 'outcome': 'Passed',
                             'message': 'Root-supplied orchestration assertion; not end-to-end verification.'})
         self.checks.append({'name': 'cold-start-acceptance', 'outcome': 'NotRun',
                             'message': 'Cold-start acceptance is separate; connected backend remains Unverified.'})
         return str(path)
+
+    def attest(self):
+        """Refresh a root-supplied Windows audit without opening any route."""
+        self.load()
+        self.assert_table()
+        if self.s.get('phase') != 'Running':
+            raise Blocked('Attestation renewal requires an already running owned tunnel.')
+        self.health()
+        audit = self.audit_config()
+        facts = audit.get('facts', {})
+        if not facts.get('owned_config_matches') or not facts.get('interop_runtime_disabled'):
+            raise Blocked('Distro configuration or interop audit failed; assertion not renewed.')
+        raw = sys.stdin.buffer.read(65537)
+        if not raw or len(raw) > 65536:
+            raise Blocked('attest requires a current Windows assertion on stdin, at most 64 KiB.')
+        self.validate_attestation(json.loads(raw))
+        path = STATE / 'scope-attestation.json'
+        atomic(path, raw)
+        self.s['attestation'] = str(path)
+        self.save()
+        return self.event('attest', 'Succeeded',
+                          'Fresh Windows scope assertion stored; no network policy changed.')
 
     def install(self):
         if not self.args.acknowledge_shared_guard:
@@ -675,8 +1115,7 @@ class Manager:
             raise Blocked('Refusing to replace an existing or relative private profile.')
         profile.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         private_path(profile.parent, directory=True)
-        if table_hash() is not None:
-            raise Blocked('Pre-existing guard table; ownership not assumed.')
+        adopt_static = self.adopt_static_boot_table()
         self.s = {'schema': 1, 'owner': str(uuid.uuid4()), 'generation': self.args.generation,
                   'phase': 'Installing', 'profile': str(profile), 'backend': p['backend'],
                   'tables': {}, 'namespaces': {}, 'files': {}, 'root_namespace': os.readlink('/proc/self/ns/net'), 'boot_id': boot_id()}
@@ -685,7 +1124,10 @@ class Manager:
         atomic(profile, encode(p))
         self.s['profile_hash'] = digest(profile.read_bytes())
         self.save()
-        self.replace_table(self.root_rules(), initial=True)  # deny before DNS/files/backend networking
+        if adopt_static:
+            self.install_manager_after_boot_guard()
+        else:
+            self.replace_table(self.root_rules(), initial=True)  # deny before DNS/files/backend networking
         self.safe_closed = True
         self.distro_prepare()
         self.interop_guard()
@@ -1093,14 +1535,35 @@ class Manager:
 
     def boot_guard(self):
         """Reinstate deny before any user workload can use shared networking."""
-        self.same_generation()
-        self.p = read_profile(self.args.profile)
+        # Emergency tables indicate an earlier boot failure or a name
+        # collision. Preserve them and refuse normal reconciliation; even an
+        # exact emergency deny must be explicitly reviewed and cleared.
+        if list_table(BOOT_EMERGENCY) is not None:
+            raise Blocked('Existing boot emergency table preserved; explicit recovery is required.')
+        if self.s.get('role') == 'distro-config':
+            state = ensure_static_boot_guard()
+            if state == 'unknown':
+                ensure_boot_emergency_deny()
+                return self.event(
+                    'guard', 'Blocked',
+                    'Unknown shared guard preserved; independent boot emergency deny installed.')
+            return self.event(
+                'guard',
+                'Succeeded',
+                'Static all-WSL boot deny installed or a shared manager guard left untouched.',
+            )
+        # Establish a first-start deny before reading private state or profile.
+        # If manager state is unavailable, this static table remains in force.
+        state = ensure_static_boot_guard()
+        if state == 'unknown':
+            ensure_boot_emergency_deny()
+            raise Blocked('Unknown shared guard preserved; boot emergency deny installed.')
+        self.load()
         self.boot_reconcile()
         # A boot hook has no user attestation and never opens the endpoint.
-        if table_hash() is None:
-            self.replace_table(self.root_rules(), initial=True)
-        else:
-            self.replace_table(self.root_rules())
+        # Replacing the static guard with the manager guard is one nft
+        # transaction, so there is no interval without a deny policy.
+        self.install_manager_after_boot_guard()
         self.safe_closed = True
         self.interop_guard()
         self.s['root_namespace'] = os.readlink('/proc/self/ns/net')
@@ -1304,7 +1767,7 @@ class Manager:
 
 def parse(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['install', 'configure', 'audit-config', 'repair-config', 'restore-config', 'status', 'start', 'stop', 'run', 'test', 'rollback', 'uninstall', 'guard'])
+    parser.add_argument('action', choices=['install', 'configure', 'audit-config', 'repair-config', 'restore-config', 'status', 'start', 'stop', 'run', 'test', 'rollback', 'uninstall', 'guard', 'attest'])
     parser.add_argument('--profile', type=Path, default=PROFILE)
     parser.add_argument('--generation', type=int)
     parser.add_argument('--scope-attestation', type=Path)
@@ -1361,7 +1824,13 @@ def main(argv=None):
                    else f'{type(exc).__name__}: invalid configuration or Linux '
                         'operation failed; no sensitive details disclosed.')
         if manager:
-            if (manager.dirty or manager.close_requested) and not manager.safe_closed:
+            if args.action == 'guard':
+                try:
+                    manager.emergency_deny(boot_only=True)
+                except (Blocked, ValueError, KeyError, TypeError, IndexError, OSError):
+                    manager.checks.append({'name': 'boot-emergency-deny', 'outcome': 'Failed',
+                                           'message': 'Boot emergency deny could not be confirmed; Windows must retain its independent deny.'})
+            elif (manager.dirty or manager.close_requested) and not manager.safe_closed:
                 try:
                     manager.emergency_deny()
                 except (Blocked, ValueError, KeyError, TypeError, IndexError, OSError):

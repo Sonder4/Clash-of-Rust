@@ -3,6 +3,27 @@ use std::path::Path;
 
 const FILES: &[(&str, &[u8])] = &[
     (
+        "Renew-ScopeAttestation.ps1",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/wsl-secure-egress/Renew-ScopeAttestation.ps1"
+        )),
+    ),
+    (
+        "Upgrade-Package.ps1",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/wsl-secure-egress/Upgrade-Package.ps1"
+        )),
+    ),
+    (
+        "Invoke-WslSecureEgressElevated.ps1",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/wsl-secure-egress/Invoke-WslSecureEgressElevated.ps1"
+        )),
+    ),
+    (
         "DockerEgressGuard.cs",
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),

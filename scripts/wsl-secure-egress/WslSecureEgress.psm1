@@ -71,9 +71,71 @@ function New-WslEgressUnixPath([string]$Path) {
 function Assert-WslEgressProfileForState([object]$Profile, [object]$State) {
     if ([string]$Profile.endpoint_ipv4 -ne [string]$State.endpoint_ipv4 -or
         [int]$Profile.endpoint_port -ne [int]$State.endpoint_port -or
-        [string]$Profile.manager_distro -ne [string]$State.manager_distro) {
+        [string]$Profile.manager_distro -ne [string]$State.manager_distro -or
+        [string]$Profile.backend -ne [string]$State.backend) {
         throw 'Private profile does not match the installed endpoint and manager distribution.'
     }
+}
+
+function Assert-WslEgressRequestedConfiguration {
+    param([object]$Configuration, [string]$Backend, [string]$Distro,
+        [string]$EndpointIPv4, [int]$EndpointPort, [bool]$PortSpecified)
+    if ($Backend -and $Backend -ne [string]$Configuration.backend) {
+        throw 'The requested backend does not match the protected installed configuration.'
+    }
+    if ($Distro -and $Distro -ne [string]$Configuration.manager_distro) {
+        throw 'The requested manager distribution does not match the private configuration.'
+    }
+    if ($EndpointIPv4 -and $EndpointIPv4 -ne [string]$Configuration.endpoint_ipv4) {
+        throw 'The requested endpoint does not match the private configuration.'
+    }
+    if ($PortSpecified -and $EndpointPort -ne [int]$Configuration.endpoint_port) {
+        throw 'The requested endpoint port does not match the private configuration.'
+    }
+}
+
+function Get-WslEgressInstalledIdentity([object]$State, [object]$SuppliedProfile = $null) {
+    # Recover only the lifetime identity from the root-owned Linux profile.
+    # Neither private keys nor endpoint values are returned by this process.
+    $readIdentity = @'
+import json,os,pathlib,stat,sys
+p=pathlib.Path('/etc/cor-egress/profile.json')
+for ancestor in (pathlib.Path('/etc'),p.parent,p):
+    st=ancestor.lstat()
+    if stat.S_ISLNK(st.st_mode) or st.st_uid!=0 or st.st_mode&0o022:
+        raise RuntimeError('unsafe installed profile')
+st=p.stat()
+if not stat.S_ISREG(st.st_mode) or st.st_size>65536 or st.st_mode&0o077 or st.st_nlink!=1:
+    raise RuntimeError('unsafe installed profile')
+profile=json.loads(p.read_bytes());request=json.load(sys.stdin)
+profile['backend']=str(profile.get('backend','')).lower()
+request['expected']['backend']=str(request['expected'].get('backend','')).lower()
+if request.get('profile') is not None:
+    request['profile']['backend']=str(request['profile'].get('backend','')).lower()
+for field in ('backend','endpoint_ipv4','endpoint_port','manager_distro'):
+    if profile.get(field)!=request['expected'].get(field):
+        raise RuntimeError('installed profile differs from protected state')
+if request.get('profile') is not None and profile!=request['profile']:
+    raise RuntimeError('supplied profile differs from the installed profile')
+uid=profile.get('uid');gid=profile.get('gid')
+if type(uid) is not int or type(gid) is not int or uid<1000 or gid<1000:
+    raise RuntimeError('invalid installed identity')
+print(json.dumps({'uid':uid,'gid':gid,'profile_matches':True}))
+'@
+    $expected = [ordered]@{}
+    foreach ($name in @('backend','endpoint_ipv4','endpoint_port','manager_distro')) {
+        $expected[$name] = $State[$name]
+    }
+    $request = [ordered]@{ expected = $expected; profile = $SuppliedProfile }
+    $response = Invoke-WslEgressProcess -Arguments @('--distribution',[string]$State.manager_distro,
+        '--user','root','--exec','/usr/bin/python3','-I','-S','-c',$readIdentity) `
+        -InputText ($request | ConvertTo-Json -Depth 12 -Compress)
+    if ($response.ExitCode -ne 0) { throw 'The root-owned installed profile does not match the requested configuration.' }
+    $identity = $response.Output | ConvertFrom-Json
+    if (-not $identity.profile_matches -or [int]$identity.uid -lt 1000 -or [int]$identity.gid -lt 1000) {
+        throw 'The installed lifetime identity could not be verified.'
+    }
+    [pscustomobject]@{ uid = [int]$identity.uid; gid = [int]$identity.gid }
 }
 
 function Test-WslEgressAdministrator {
@@ -162,21 +224,31 @@ function Install-WslEgressConfig([object]$State) {
         [IO.File]::WriteAllBytes((Join-Path $script:StateRoot 'wslconfig.before'), [IO.File]::ReadAllBytes($path))
         $text = [IO.File]::ReadAllText($path)
     }
+    $replacement = ConvertTo-WslEgressConfig $text
+    $replacementBytes = (New-Object Text.UTF8Encoding($false)).GetBytes($replacement)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $State.wslconfig.after_hash = ([BitConverter]::ToString($sha.ComputeHash($replacementBytes))).Replace('-', '') }
+    finally { $sha.Dispose() }
+    $State.wslconfig_write_started = $true
     Save-WslEgressJson $State (Join-Path $script:StateRoot 'state.json')
-    [IO.File]::WriteAllText($path, (ConvertTo-WslEgressConfig $text), (New-Object Text.UTF8Encoding($false)))
-    $State.wslconfig.after_hash = Get-WslEgressFileHash $path
+    [IO.File]::WriteAllBytes($path, $replacementBytes)
+    if ((Get-WslEgressFileHash $path) -ne $State.wslconfig.after_hash) { throw 'WSL config write readback failed.' }
     Save-WslEgressJson $State (Join-Path $script:StateRoot 'state.json')
     Assert-WslEgressBaseline @(Get-WslEgressBaseline)
 }
 
 function Restore-WslEgressConfig([object]$State) {
-    if (-not $State.PSObject.Properties['wslconfig'] -and $State -isnot [Collections.IDictionary]) { return }
-    if (-not $State.wslconfig -or -not $State.wslconfig.after_hash) { return }
+    $wslconfig = Get-WslEgressStateValue $State 'wslconfig'
+    $afterHash = Get-WslEgressStateValue $wslconfig 'after_hash'
+    if (-not $wslconfig -or -not $afterHash) { return }
     $path = Join-Path $env:USERPROFILE '.wslconfig'
-    if ((Get-WslEgressFileHash $path) -ne $State.wslconfig.after_hash) { throw 'WSL config changed after installation; targeted restore refused.' }
-    if ($State.wslconfig.existed) {
+    $currentHash = Get-WslEgressFileHash $path
+    $beforeHash = Get-WslEgressStateValue $wslconfig 'before_hash'
+    if ($currentHash -eq $beforeHash) { return }
+    if ($currentHash -ne $afterHash) { throw 'WSL config changed after installation; targeted restore refused.' }
+    if ([bool](Get-WslEgressStateValue $wslconfig 'existed' $false)) {
         $snapshot = Join-Path $script:StateRoot 'wslconfig.before'
-        if ((Get-WslEgressFileHash $snapshot) -ne $State.wslconfig.before_hash) { throw 'WSL config snapshot hash mismatch.' }
+        if ((Get-WslEgressFileHash $snapshot) -ne $beforeHash) { throw 'WSL config snapshot hash mismatch.' }
         [IO.File]::WriteAllBytes($path, [IO.File]::ReadAllBytes($snapshot))
     } else { Remove-Item -LiteralPath $path -ErrorAction Stop }
     Assert-WslEgressBaseline @(Get-WslEgressBaseline)
@@ -464,6 +536,12 @@ function Read-WslEgressProfile([string]$Path) {
             -not $profile.PSObject.Properties['resolver_ipv4'] -or
             -not $profile.PSObject.Properties['uid'] -or -not $profile.PSObject.Properties['gid']) { throw 'Incomplete Linux profile.' }
     }
+    if ($profile.PSObject.Properties['expected_egress_ipv4']) {
+        $egress = $null
+        if (-not [Net.IPAddress]::TryParse([string]$profile.expected_egress_ipv4, [ref]$egress) -or
+            $egress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
+            [string]$egress -ne [string]$profile.expected_egress_ipv4) { throw 'Expected egress must be an explicit IPv4 address.' }
+    }
     $profile
 }
 
@@ -535,6 +613,145 @@ function Get-WslEgressClosureAudit([object]$State) {
     [pscustomobject]@{ confirmed = [bool]$confirmed }
 }
 
+function Get-WslEgressStateValue {
+    param([object]$State, [string]$Name, [object]$Default = $null)
+    if ($null -eq $State) { return $Default }
+    if ($State -is [Collections.IDictionary]) {
+        if ($State.Contains($Name)) { return $State[$Name] }
+        return $Default
+    }
+    $property = $State.PSObject.Properties[$Name]
+    if ($property) { return $property.Value }
+    $Default
+}
+
+function Set-WslEgressStateValue {
+    param([object]$State, [string]$Name, [object]$Value)
+    if ($State -is [Collections.IDictionary]) {
+        $State[$Name] = $Value
+        return
+    }
+    $property = $State.PSObject.Properties[$Name]
+    if ($property) { $property.Value = $Value }
+    else { $State | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force }
+}
+
+function Test-WslEgressPartialInstall([object]$State) {
+    # Older journals predate the manager-install markers. A preparing journal
+    # without either marker is recoverable on Windows only. Once Linux install
+    # may have started, only the Linux manager can safely decide what it owns.
+    if (-not $State) { return $false }
+    return [string]$State.phase -in @('preparing','failed_closed_requested') -and
+        -not [bool](Get-WslEgressStateValue $State 'linux_manager_install_started' $false) -and
+        -not [bool](Get-WslEgressStateValue $State 'linux_manager_installed' $false)
+}
+
+function Remove-WslEgressGuardianIfOwned {
+    $service = Get-CimInstance Win32_Service -Filter "Name='ClashOfRust.WslEgress'" -ErrorAction SilentlyContinue
+    if (-not $service) { return }
+    if (-not (Test-WslEgressGuardianServiceIdentity $service)) {
+        throw 'The guardian service changed ownership; preserving it for manual review.'
+    }
+    Stop-Service -Name 'ClashOfRust.WslEgress' -Force -ErrorAction Stop
+    & (Join-Path $env:SystemRoot 'System32\sc.exe') delete 'ClashOfRust.WslEgress' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'The owned guardian service could not be removed.' }
+    if (Get-CimInstance Win32_Service -Filter "Name='ClashOfRust.WslEgress'" -ErrorAction SilentlyContinue) {
+        throw 'The guardian service remains after removal.'
+    }
+}
+
+function Restore-WslEgressPartialInstall([object]$State) {
+    if (-not (Test-WslEgressPartialInstall $State)) {
+        throw 'The journal is not a recoverable partial installation.'
+    }
+    if ((Get-WslEgressStateValue $State 'linux_manager_install_started' $false) -or
+        (Get-WslEgressStateValue $State 'linux_manager_installed' $false)) {
+        throw 'A Linux manager installation may have started and cannot use Windows-only recovery.'
+    }
+    # Restore host objects only when this transaction recorded writing them.
+    # Endpoint creation precedes settings_written; its exact tuple is verified
+    # by Set-WslEgressEndpoint before any object is changed.
+    if (Get-WslEgressStateValue $State 'endpoint_rule_written' $false) {
+        Set-WslEgressEndpoint $State $false
+    }
+    $wslconfig = Get-WslEgressStateValue $State 'wslconfig'
+    if ($wslconfig -and (Get-WslEgressStateValue $wslconfig 'after_hash')) {
+        Restore-WslEgressConfig $State
+    }
+    $dockerBackends = @(Get-WslEgressStateValue $State 'docker_backends' @())
+    if ((Get-WslEgressStateValue $State 'docker_guard_write_started' $false) -or
+        (Get-WslEgressStateValue $State 'docker_guard_written' $false) -or
+        $dockerBackends.Count -gt 0) {
+        Set-WslEgressDockerGuard $State $true
+    }
+    if ((Get-WslEgressStateValue $State 'settings_write_started' $false) -or
+        (Get-WslEgressStateValue $State 'settings_written' $false)) {
+        $before = Get-WslEgressStateValue $State 'before_persistent_settings'
+        if (-not $before) { $before = Get-WslEgressStateValue $State 'before_settings' }
+        if (-not $before) { throw 'The partial journal has no Hyper-V settings snapshot.' }
+        Set-NetFirewallHyperVVMSetting -PolicyStore PersistentStore -Name $script:Creator `
+            -Enabled $before.Enabled -DefaultInboundAction $before.DefaultInboundAction `
+            -DefaultOutboundAction $before.DefaultOutboundAction -AllowHostPolicyMerge $before.AllowHostPolicyMerge `
+            -LoopbackEnabled $before.LoopbackEnabled -ErrorAction Stop
+        $restoredSettings = Get-WslEgressSettingsFromStore -PolicyStore PersistentStore
+        if (($restoredSettings | ConvertTo-Json -Compress) -ne ($before | ConvertTo-Json -Compress)) {
+            throw 'Persistent Hyper-V settings restore readback failed; fail-closed policy retained.'
+        }
+    }
+    if (Get-WslEgressStateValue $State 'guardian_service_installed' $false) {
+        Remove-WslEgressGuardianIfOwned
+    }
+    Set-WslEgressStateValue $State 'phase' 'restored'
+    Set-WslEgressStateValue $State 'endpoint_enabled' $false
+    Save-WslEgressJson $State (Join-Path $script:StateRoot 'state.json')
+    Assert-WslEgressBaseline @(Get-WslEgressBaseline)
+}
+
+function Save-WslEgressRestoredGeneration([object]$State) {
+    if (-not $State -or [string]$State.phase -ne 'restored') {
+        throw 'Only a verified restored journal can be archived.'
+    }
+    $archive = Join-Path $script:StateRoot ('restored-' + [string]$State.generation + '-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $archive -ErrorAction Stop | Out-Null
+    $snapshot = Join-Path $script:StateRoot 'wslconfig.before'
+    if (Test-Path -LiteralPath $snapshot -PathType Leaf) {
+        Copy-Item -LiteralPath $snapshot -Destination (Join-Path $archive 'wslconfig.before') -ErrorAction Stop
+    }
+    $archiveState = Join-Path $archive 'state.json'
+    Save-WslEgressJson $State $archiveState
+    foreach ($name in @('scope-renewal.json', 'guardian-audit.json')) {
+        $path = Join-Path $script:StateRoot $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Copy-Item -LiteralPath $path -Destination (Join-Path $archive $name) -ErrorAction Stop
+        }
+    }
+    try {
+        $readback = [IO.File]::ReadAllText($archiveState) | ConvertFrom-Json
+    } catch {
+        throw 'The archived recovery journal is unreadable; live recovery state was preserved.'
+    }
+    if ([string]$readback.phase -ne 'restored' -or
+        [string]$readback.generation -ne [string]$State.generation) {
+        throw 'The archived recovery journal failed verification; live recovery state was preserved.'
+    }
+    $wslconfig = Get-WslEgressStateValue $State 'wslconfig'
+    if ($wslconfig -and $wslconfig.existed) {
+        $archivedSnapshot = Join-Path $archive 'wslconfig.before'
+        if (-not (Test-Path -LiteralPath $archivedSnapshot -PathType Leaf) -or
+            (Get-WslEgressFileHash $archivedSnapshot) -ne [string]$wslconfig.before_hash) {
+            throw 'The archived WSL config snapshot failed verification; live recovery state was preserved.'
+        }
+    }
+    Remove-Item -LiteralPath (Join-Path $script:StateRoot 'state.json') -ErrorAction Stop
+    foreach ($name in @('scope-renewal.json', 'guardian-audit.json', 'wslconfig.before')) {
+        $path = Join-Path $script:StateRoot $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -ErrorAction Stop
+        }
+    }
+    $archive
+}
+
 function Get-WslEgressGuardianServiceCommand([string]$Binary) { '"' + $Binary + '" --service' }
 
 function Get-WslEgressGuardianPackageBinary {
@@ -560,9 +777,13 @@ function Test-WslEgressGuardianServiceIdentity([object]$Service) {
     return (Test-WslEgressGuardianServicePath ([string]$Service.PathName))
 }
 
-function Install-WslEgressGuardian {
+function Install-WslEgressGuardian([object]$State) {
     $expected = Get-WslEgressGuardianServiceCommand (Get-WslEgressGuardianPackageBinary)
     $service = Get-CimInstance Win32_Service -Filter "Name='ClashOfRust.WslEgress'"
+    if (-not $service) {
+        $State.guardian_service_installed = $true
+        Save-WslEgressJson $State (Join-Path $script:StateRoot 'state.json')
+    }
     if ($service) {
         if (-not (Test-WslEgressGuardianServiceIdentity $service)) {
             throw 'WSL guardian service identity differs from the owned service.'
@@ -818,6 +1039,138 @@ function Get-WslEgressScopeAttestation([object]$State) {
     }
 }
 
+function Get-WslEgressRenewalTaskDefinition([object]$State) {
+    $package = [IO.Path]::GetFullPath($PSScriptRoot)
+    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    if (-not $package.StartsWith($programFiles.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The renewal task requires the protected installed package.'
+    }
+    $parent = [IO.DirectoryInfo]$package
+    while ($parent) {
+        if ((Get-Item -LiteralPath $parent.FullName).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'Redirected renewal package refused.'
+        }
+        $parent = $parent.Parent
+    }
+    foreach ($item in @((Join-Path $package 'Renew-ScopeAttestation.ps1'), (Join-Path $package 'WslSecureEgress.psm1'))) {
+        if (-not (Test-Path -LiteralPath $item -PathType Leaf)) { throw 'The fixed renewal package is missing.' }
+        foreach ($ancestor in @((Get-Item -LiteralPath $item), (Get-Item -LiteralPath $package))) {
+            if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected renewal package refused.' }
+        }
+    }
+    $executable = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = '-NoLogo -NoProfile -NonInteractive -File "' +
+        (Join-Path $package 'Renew-ScopeAttestation.ps1') + '"'
+    [pscustomobject]@{
+        name = 'ClashOfRust-WslEgress-Renew'
+        path = '\'
+        executable = $executable
+        arguments = $arguments
+        owner_sid = [string]$State.owner_sid
+    }
+}
+
+function Test-WslEgressRenewalTaskIdentity([object]$Task, [object]$Definition) {
+    if (-not $Task -or @($Task.Actions).Count -ne 1) { return $false }
+    $action = @($Task.Actions)[0]
+    try {
+        $identity = [string]$Task.Principal.UserId
+        if ($identity -match '^S-1-\d+(?:-\d+)+$') {
+            $actualSid = (New-Object Security.Principal.SecurityIdentifier($identity)).Value
+        } else {
+            $account = New-Object Security.Principal.NTAccount($identity)
+            $actualSid = $account.Translate([Security.Principal.SecurityIdentifier]).Value
+        }
+    } catch { return $false }
+    [string]$Task.TaskName -eq [string]$Definition.name -and
+        [string]$Task.TaskPath -eq [string]$Definition.path -and
+        $actualSid -eq [string]$Definition.owner_sid -and
+        [string]$Task.Principal.LogonType -eq 'Interactive' -and
+        [string]$Task.Principal.RunLevel -eq 'Highest' -and
+        [string]$action.Execute -eq [string]$Definition.executable -and
+        [string]$action.Arguments -eq [string]$Definition.arguments -and
+        -not [string]$action.WorkingDirectory
+}
+
+function Install-WslEgressRenewalTask([object]$State) {
+    $definition = Get-WslEgressRenewalTaskDefinition $State
+    $existing = Get-ScheduledTask -TaskName $definition.name -TaskPath $definition.path -ErrorAction SilentlyContinue
+    if ($existing -and -not (Test-WslEgressRenewalTaskIdentity $existing $definition)) {
+        throw 'A different task uses the owned renewal task name; preserving it.'
+    }
+    $action = New-ScheduledTaskAction -Execute $definition.executable -Argument $definition.arguments
+    $principal = New-ScheduledTaskPrincipal -UserId $definition.owner_sid -LogonType Interactive -RunLevel Highest
+    $trigger = @(
+        (New-ScheduledTaskTrigger -AtLogOn -User $definition.owner_sid),
+        (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1))
+    )
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit (New-TimeSpan -Seconds 55) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName $definition.name -TaskPath $definition.path -Action $action `
+        -Principal $principal -Trigger $trigger -Settings $settings `
+        -Description 'Renews current-user WSL scope proofs after full audits; never opens the endpoint.' `
+        -Force | Out-Null
+    $readback = Get-ScheduledTask -TaskName $definition.name -TaskPath $definition.path -ErrorAction Stop
+    if (-not (Test-WslEgressRenewalTaskIdentity $readback $definition)) {
+        throw 'The renewal task identity readback failed.'
+    }
+    $State['renewal_task'] = [ordered]@{ name = $definition.name; path = $definition.path; owner_sid = $definition.owner_sid }
+}
+
+function Remove-WslEgressRenewalTask([object]$State) {
+    $definition = Get-WslEgressRenewalTaskDefinition $State
+    $existing = Get-ScheduledTask -TaskName $definition.name -TaskPath $definition.path -ErrorAction SilentlyContinue
+    if (-not $existing) { return }
+    if (-not (Test-WslEgressRenewalTaskIdentity $existing $definition)) {
+        throw 'The renewal task changed; preserving it for manual review.'
+    }
+    Unregister-ScheduledTask -TaskName $definition.name -TaskPath $definition.path -Confirm:$false -ErrorAction Stop
+}
+
+function Invoke-WslEgressScopeRenewal {
+    # The interactive-token task is intentionally separate from the SYSTEM
+    # guardian. A scheduled audit never starts any stopped user distribution.
+    $sid = Assert-WslEgressUser
+    if (-not (Test-WslEgressAdministrator)) { throw 'Scope renewal requires the installed owner administrator token.' }
+    $mutex = New-Object Threading.Mutex($false, 'Global\ClashOfRust.WslEgress.Operation')
+    if (-not $mutex.WaitOne(0)) { $mutex.Dispose(); return }
+    $state = $null
+    $record = [ordered]@{ schema_version = 1; observed_at = (Get-Date -Format o)
+        generation = 0; outcome = 'not_run'; stage = 'state'; expires_after_seconds = 300 }
+    try {
+        $state = Read-WslEgressState
+        if (-not $state -or $state.owner_sid -ne $sid) { throw 'Renewal owner does not match installed state.' }
+        $record.generation = [long]$state.generation
+        if (-not $state.endpoint_enabled -or $state.phase -notin @('connected_unverified','verified')) { return }
+        $record.stage = 'running_distribution_inventory'
+        $running = @(Get-WslEgressRunningDistributions)
+        $required = @(Get-WslEgressOrdinaryDistributions @(Get-WslEgressDistributions))
+        if (@($required | Where-Object { $running -notcontains $_ }).Count -gt 0) {
+            throw 'A required distribution is stopped; renewal will not start it.'
+        }
+        $record.stage = 'scope_audit'
+        $proof = Get-WslEgressScopeAttestation $state
+        if (-not $proof.effective_audit_passed) { throw 'Current scope audit did not pass.' }
+        $record.stage = 'linux_attestation'
+        $renewed = Invoke-WslEgressLinux $state 'attest' ($proof | ConvertTo-Json -Depth 8 -Compress)
+        if ($renewed.outcome -ne 'succeeded') { throw 'Linux refused the renewed proof.' }
+        $record.outcome = 'succeeded'; $record.stage = 'complete'
+    } catch {
+        $record.outcome = 'failed'
+        if ($state -and $state.owner_sid -eq $sid -and $state.endpoint_enabled) {
+            try { Set-WslEgressEndpoint $state $false } catch { }
+            $state.phase = 'blocked'
+            Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
+        }
+    } finally {
+        if ($state -and $state.owner_sid -eq $sid) {
+            Save-WslEgressJson $record (Join-Path $script:StateRoot 'scope-renewal.json')
+        }
+        $mutex.ReleaseMutex(); $mutex.Dispose()
+    }
+    [pscustomobject]$record
+}
+
 function Invoke-WslEgressDistroConfiguration([object]$State, [object]$Profile, [object[]]$Distributions) {
     $ordinary = @(Get-WslEgressOrdinaryDistributions $Distributions)
     if ($ordinary -notcontains [string]$State.manager_distro) {
@@ -853,6 +1206,8 @@ function Invoke-WslEgressDistroConfiguration([object]$State, [object]$Profile, [
 
 function Set-WslEgressPersistentGuard([object]$State) {
     # No blanket Block rule: it would override a later Endpoint Allow.
+    $State.settings_write_started = $true
+    Save-WslEgressJson $State (Join-Path $script:StateRoot 'state.json')
     Set-NetFirewallHyperVVMSetting -PolicyStore PersistentStore -Name $script:Creator `
         -Enabled True -DefaultInboundAction Block -DefaultOutboundAction Block `
         -AllowHostPolicyMerge False -LoopbackEnabled False -ErrorAction Stop
@@ -931,9 +1286,213 @@ function Start-WslEgressLifetime([object]$State, [object]$Profile) {
     }
 }
 
+function Add-WslEgressInspection([object]$Result, [object]$State, [object[]]$Distributions) {
+    $Result.checks += [ordered]@{ id = 'administrator'
+        result = $(if (Test-WslEgressAdministrator) { 'PASS' } else { 'NOT_RUN' })
+        detail = 'Network writes require an administrator.' }
+    if (-not $State -or $State.phase -eq 'restored') {
+        $Result.message = 'Not installed; no protection is claimed.'
+        $Result.checks += [ordered]@{ id = 'wsl_runtime'; result = 'NOT_RUN'
+            detail = 'Read-only enumeration does not start stopped distributions.' }
+        return
+    }
+    try {
+        $audit = Get-WslEgressGuardAudit $State
+        $Result.checks += [ordered]@{ id = 'host_policy'
+            result = $(if ($audit.valid) { 'PASS' } else { 'FAIL' })
+            detail = 'Effective settings and endpoint rules only; not a cold-boot proof.' }
+    } catch {
+        $Result.checks += [ordered]@{ id = 'host_policy'; result = 'BLOCKED'
+            detail = 'Host policy inspection requires a readable effective policy.' }
+    }
+    try {
+        $running = @(Get-WslEgressRunningDistributions)
+        $Result.distributions = @($Distributions | ForEach-Object {
+            $name = [string]$_.name
+            [ordered]@{ name = $name
+                state = $(if ($running -contains $name) { 'running' } else { 'stopped' })
+                coverage = $(if (@($State.distributions) -notcontains $name) { 'not_enrolled' }
+                    elseif ($name -match '^docker-desktop(?:-data)?$') { 'blocked' } else { 'unknown' }) }
+        })
+        if ($running -contains [string]$State.manager_distro) {
+            $linux = Invoke-WslEgressLinux $State 'status'
+            $healthy = $linux.outcome -eq 'succeeded' -and $linux.phase -eq 'Running'
+            $Result.checks += [ordered]@{ id = 'wsl_runtime'; result = $(if ($healthy) { 'PASS' } else { 'FAIL' })
+                detail = 'Running manager local guard and interface invariants; no stopped distribution was started.' }
+            if (-not $healthy -and $State.endpoint_enabled) { $Result.phase = 'blocked' }
+        } else {
+            $Result.checks += [ordered]@{ id = 'wsl_runtime'; result = 'NOT_RUN'
+                detail = 'The manager distribution is stopped; no runtime command was executed.' }
+            if ($State.endpoint_enabled) { $Result.phase = 'blocked' }
+        }
+    } catch {
+        $Result.checks += [ordered]@{ id = 'wsl_runtime'; result = 'BLOCKED'
+            detail = 'The running manager did not return a valid current-generation status.' }
+        if ($State.endpoint_enabled) { $Result.phase = 'blocked' }
+    }
+    $proofPath = Join-Path $script:StateRoot 'scope-renewal.json'
+    $fresh = $false
+    if (Test-Path -LiteralPath $proofPath -PathType Leaf) {
+        try {
+            $proof = [IO.File]::ReadAllText($proofPath) | ConvertFrom-Json
+            $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse([string]$proof.observed_at)).TotalSeconds
+            $fresh = $proof.generation -eq $State.generation -and $proof.outcome -eq 'succeeded' -and $age -ge 0 -and $age -lt 300
+        } catch { $fresh = $false }
+    }
+    $Result.checks += [ordered]@{ id = 'scope_attestation'; result = $(if ($fresh) { 'PASS' } else { 'NOT_RUN' })
+        detail = 'Current-user full-scope proof renewal; expires after five minutes and is not end-to-end acceptance.' }
+    $Result.message = 'Installed policy inspected; end-to-end and cold-boot acceptance are separate.'
+}
+
+function Invoke-WslEgressFunctionalProbe([object]$State) {
+    # This fixed probe runs through the same unprivileged launcher as an
+    # isolated application. It emits booleans only; no address is exported.
+    $probe = @'
+import ipaddress,json,os,pathlib,socket,ssl,subprocess,sys,urllib.request
+request=json.load(sys.stdin);checks={}
+def https_json(url):
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(url,timeout=12) as response:
+        if response.status!=200: raise RuntimeError('unexpected status')
+        return json.loads(response.read(65537))
+try:
+    echo=https_json('https://api.ipify.org?format=json')
+    address=ipaddress.IPv4Address(echo['ip'])
+    checks['functional_egress']=str(address)==request['expected_ipv4']
+except Exception: checks['functional_egress']=False
+try:
+    location=https_json('https://ipinfo.io/json')
+    checks['german_exit']=(location.get('country')=='DE' and location.get('ip')==request['expected_ipv4'])
+except Exception: checks['german_exit']=False
+try:
+    sock=socket.socket(socket.AF_INET6,socket.SOCK_STREAM);sock.settimeout(4)
+    sock.connect(('2606:4700:4700::1111',443));sock.close()
+    checks['ipv4_only']=False
+except OSError: checks['ipv4_only']=True
+try:
+    interfaces=json.loads(subprocess.check_output(['/usr/sbin/ip','-j','address','show'],timeout=5))
+    names={item['ifname'] for item in interfaces}
+    checks['virtual_interfaces']=names=={'lo','wg0','cor-bg0'}
+    checks['host_mount_hidden']=not pathlib.Path('/mnt/c').exists() and not pathlib.Path('/init').exists()
+except Exception:
+    checks['virtual_interfaces']=False;checks['host_mount_hidden']=False
+checks['interop_guarded']=not pathlib.Path('/mnt/c/Windows/System32/ipconfig.exe').exists()
+checks['proxy_environment_clear']=not any(name.lower().endswith('proxy') for name in os.environ)
+print(json.dumps({'schema':1,'generation':request['generation'],'checks':checks}))
+'@
+    $expected = if ($State.Contains('expected_egress_ipv4')) { [string]$State.expected_egress_ipv4 } else { [string]$State.endpoint_ipv4 }
+    $request = [ordered]@{ generation = [long]$State.generation; expected_ipv4 = $expected }
+    $response = Invoke-WslEgressProcess -Arguments @('--distribution',[string]$State.manager_distro,
+        '--user','root','--exec',$script:LinuxHelper,'run','--generation',[string]$State.generation,
+        '--','/usr/bin/python3','-I','-S','-c',$probe) `
+        -InputText ($request | ConvertTo-Json -Compress) -TimeoutSeconds 55
+    if ($response.ExitCode -ne 0 -or $response.Output.Length -gt 65536) {
+        throw 'The isolated functional probe did not complete.'
+    }
+    $result = $response.Output | ConvertFrom-Json
+    $names = @('functional_egress','german_exit','ipv4_only','virtual_interfaces','host_mount_hidden','interop_guarded','proxy_environment_clear')
+    if ($result.schema -ne 1 -or $result.generation -ne $State.generation -or
+        @($result.checks.PSObject.Properties).Count -ne $names.Count) { throw 'Invalid isolated functional probe response.' }
+    foreach ($name in $names) {
+        if (-not $result.checks.PSObject.Properties[$name] -or $result.checks.$name -isnot [bool]) {
+            throw 'Invalid isolated functional probe check.'
+        }
+        [ordered]@{ id = $name; result = $(if ($result.checks.$name) { 'PASS' } else { 'FAIL' })
+            detail = 'Executed in the strict unprivileged application namespace with TLS validation enabled.' }
+    }
+    $handshakeScript = @'
+import json,subprocess,time
+r=subprocess.run(['/usr/sbin/ip','netns','exec','cor-egress-gw','/usr/bin/wg','show','wg0','latest-handshakes'],capture_output=True,text=True,timeout=5)
+times=[int(line.split()[1]) for line in r.stdout.splitlines() if len(line.split())==2]
+print(json.dumps({'connected':r.returncode==0 and len(times)==1 and 0<=time.time()-times[0]<180}))
+'@
+    $handshake = Invoke-WslEgressProcess -Arguments @('--distribution',[string]$State.manager_distro,'--user','root',
+        '--exec','/usr/bin/python3','-I','-S','-c',$handshakeScript) -TimeoutSeconds 10
+    $connected = $handshake.ExitCode -eq 0 -and ($handshake.Output | ConvertFrom-Json).connected -eq $true -and
+        $result.checks.functional_egress -eq $true
+    [ordered]@{ id = 'wireguard_connected'; result = $(if ($connected) { 'PASS' } else { 'FAIL' })
+        detail = 'A recent WireGuard handshake and a successful strict-launcher IPv4 egress request were both observed.' }
+}
+
+function Get-WslEgressPreflight([object]$State, [object[]]$Distributions, [string]$Backend,
+    [string]$Distro, [string]$ProfilePath, [string]$EndpointIPv4, [int]$EndpointPort, [bool]$PortSpecified) {
+    $buildSupported = [Environment]::OSVersion.Version.Build -ge 22621
+    [ordered]@{ id = 'windows_compatibility'; result = $(if ($buildSupported) { 'PASS' } else { 'BLOCKED' })
+        detail = 'Windows 11 build 22621 or later with supported Hyper-V Firewall cmdlets is required.' }
+    $missing = @(@('Get-NetFirewallHyperVVMSetting','Set-NetFirewallHyperVVMSetting',
+        'Get-NetFirewallHyperVRule','New-NetFirewallHyperVRule','Set-NetFirewallHyperVRule','Remove-NetFirewallHyperVRule') |
+        Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+    [ordered]@{ id = 'hyperv_api'; result = $(if ($missing.Count -eq 0) { 'PASS' } else { 'BLOCKED' })
+        detail = 'Install supported Windows and WSL updates when Hyper-V Firewall cmdlets are unavailable.' }
+    [ordered]@{ id = 'wsl_available'
+        result = $(if (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'System32\wsl.exe') -PathType Leaf) { 'PASS' } else { 'BLOCKED' })
+        detail = 'WSL is required. Use the official wsl --install workflow and complete any requested restart before deployment.' }
+    $configuration = $State
+    if (-not $configuration) {
+        try {
+            $configuration = Read-WslEgressProfile $ProfilePath
+            [ordered]@{ id = 'private_profile'; result = 'PASS'; detail = 'Private profile schema and key sizes validated; values are not exported.' }
+        } catch {
+            [ordered]@{ id = 'private_profile'; result = 'BLOCKED'
+                detail = 'Choose a valid private WireGuard profile before the first installation; endpoint fields alone do not supply tunnel keys.' }
+        }
+    } else {
+        [ordered]@{ id = 'private_profile'; result = 'PASS'; detail = 'The existing protected installation is reused; no private profile re-entry is required.' }
+    }
+    if ($configuration) {
+        $matches = $true
+        try { Assert-WslEgressRequestedConfiguration $configuration $Backend $Distro $EndpointIPv4 $EndpointPort $PortSpecified }
+        catch { $matches = $false }
+        [ordered]@{ id = 'configuration_match'; result = $(if ($matches) { 'PASS' } else { 'BLOCKED' })
+            detail = 'Explicit backend, distribution, endpoint and port overrides must match the protected profile.' }
+        $manager = [string]$configuration.manager_distro
+        $registered = @($Distributions | Where-Object { $_.name -eq $manager }).Count -eq 1
+        [ordered]@{ id = 'manager_distribution'; result = $(if ($registered) { 'PASS' } else { 'BLOCKED' })
+            detail = 'The private profile manager must be an existing WSL2 distribution; prepare it with the official WSL installation workflow.' }
+        if ($registered) {
+            try {
+                $running = @(Get-WslEgressRunningDistributions)
+                if ($running -contains $manager) {
+                    $scriptText = 'import json,shutil;print(json.dumps({"available":all(shutil.which(x) for x in ("ip","nft","wg","bwrap","setpriv","python3"))}))'
+                    $probe = Invoke-WslEgressProcess -Arguments @('--distribution',$manager,'--user','root','--exec',
+                        '/usr/bin/python3','-I','-S','-c',$scriptText) -TimeoutSeconds 15
+                    $available = $probe.ExitCode -eq 0 -and ($probe.Output | ConvertFrom-Json).available -eq $true
+                    [ordered]@{ id = 'linux_dependencies'; result = $(if ($available) { 'PASS' } else { 'BLOCKED' })
+                        detail = 'Required Linux tools: python3, iproute2, nftables, wireguard-tools, bubblewrap and util-linux.' }
+                } else {
+                    [ordered]@{ id = 'linux_dependencies'; result = 'NOT_RUN'
+                        detail = 'The manager is stopped; dependency inspection does not start it. Install dependencies before the initial cutover.' }
+                }
+            } catch {
+                [ordered]@{ id = 'linux_dependencies'; result = 'BLOCKED'
+                    detail = 'The running manager dependency probe did not return a valid result.' }
+            }
+        }
+    }
+    [ordered]@{ id = 'strict_tailscale_boot'; result = $(if ($Backend -eq 'WireGuard') { 'NOT_SUPPORTED' } else { 'BLOCKED' })
+        detail = 'Tailscale dynamic control and relay endpoints do not satisfy the fixed-endpoint host allowlist; strict installation uses WireGuard.' }
+}
+
+function Get-WslEgressRecoveryInstruction([string]$Stage) {
+    switch ($Stage) {
+        'private_profile_validation' { 'Choose a valid private WireGuard profile matching the requested endpoint and manager distribution.' }
+        'stopped_distribution_gate' { 'Save work and stop all WSL distributions before the initial network cutover.' }
+        'host_guard_audit' { 'Run Doctor and review effective Hyper-V policy before reconnecting; do not reset the global firewall.' }
+        'installed_profile_identity' { 'Use the root-owned installed profile; an optional supplied profile must match it exactly.' }
+        'wsl_lifetime' { 'Check manager distribution startup, Linux lifetime identity and required tools.' }
+        'scope_audit' { 'Review current distribution coverage, Hyper-V policy, NAT and DNS settings, disabled interop and Docker isolation.' }
+        'linux_start' { 'Inspect the protected Linux journal and current generation; repair owned configuration before retrying.' }
+        'endpoint_enable' { 'Endpoint policy readback failed; inspect effective policy and the endpoint closure check.' }
+        'scope_renewal_task' { 'Review Task Scheduler permissions and the exact owned renewal task identity before reconnecting.' }
+        'guardian_service' { 'Review the installed guardian service executable, service account and automatic startup mode.' }
+        'distro_configuration' { 'Review each recorded distribution configuration and its adjacent rollback snapshot.' }
+        default { 'Inspect the protected local journal at the reported failure stage; preserve owned guard rules and backups.' }
+    }
+}
+
 function Invoke-WslEgressOperation {
     [CmdletBinding()]
-    param([string]$Action = 'Doctor', [string]$Backend = 'WireGuard', [string]$Distro = 'COR-Egress',
+    param([string]$Action = 'Doctor', [string]$Backend = 'WireGuard', [string]$Distro = '',
         [string]$ProfilePath, [string]$EndpointIPv4, [int]$EndpointPort = 51820,
         [switch]$Execute, [switch]$RestoreOriginalNetwork)
     $result = New-WslEgressResponse -Action $Action -Backend $Backend
@@ -955,33 +1514,59 @@ function Invoke-WslEgressOperation {
     })
     if ($Action -in @('Doctor','Status')) {
         $result.outcome = 'succeeded'
-        $result.checks += [ordered]@{ id = 'administrator'; result = $(if (Test-WslEgressAdministrator) { 'PASS' } else { 'NOT_RUN' }); detail = 'Network writes require an administrator.' }
-        $result.checks += [ordered]@{ id = 'wsl_runtime'; result = 'NOT_RUN'; detail = 'Registry names only; running state and runtime acceptance are not inferred.' }
-        if ($state) {
-            $audit = Get-WslEgressGuardAudit $state
-            $result.checks += [ordered]@{ id = 'host_policy'; result = $(if ($audit.valid) { 'PASS' } else { 'FAIL' }); detail = ($audit.issues -join ',') }
-            # Configuration is not packet-level proof. Never infer verified.
-            $result.message = 'Installed policy inspected; end-to-end and cold-boot acceptance are separate.'
-        } else { $result.message = 'Not installed; no protection is claimed.' }
+        Add-WslEgressInspection $result $state $distributions
         return $result
     }
     if ($Action -eq 'Test') {
         $result.outcome = 'not_run'; $result.phase = 'acceptance_pending'
-        $result.message = 'Runtime acceptance requires controlled receiver and reboot evidence; no business target is contacted.'
-        $audit = if ($state -and $state.phase -ne 'restored') { Get-WslEgressGuardAudit $state } else { $null }
-        $result.checks += [ordered]@{ id = 'host_policy'; result = $(if (-not $audit) { 'NOT_RUN' } elseif ($audit.valid) { 'PASS' } else { 'FAIL' }); detail = 'Static effective policy readback only.' }
-        foreach ($check in @('german_exit','dns_path','ipv6_denial','docker_runtime','cold_boot','network_switch','sleep_resume')) {
-            $result.checks += [ordered]@{ id = $check; result = 'NOT_RUN'; detail = 'No executed production acceptance evidence supplied.' }
+        Add-WslEgressInspection $result $state $distributions
+        if ($state -and $state.phase -ne 'restored' -and $state.endpoint_enabled) {
+            $runtime = @($result.checks | Where-Object { $_.id -eq 'wsl_runtime' -and $_.result -eq 'PASS' })
+            if ($runtime.Count -eq 1) {
+                try {
+                    $checks = @(Invoke-WslEgressFunctionalProbe $state)
+                    $result.checks += $checks
+                    $result.outcome = if (@($checks | Where-Object { $_.result -ne 'PASS' }).Count -eq 0) { 'succeeded' } else { 'failed' }
+                    $result.phase = 'connected_unverified'
+                } catch {
+                    $result.outcome = 'blocked'; $result.phase = 'blocked'
+                    $result.checks += [ordered]@{ id = 'functional_egress'; result = 'BLOCKED'
+                        detail = 'The strict launcher probe could not execute; inspect current scope proof renewal and Linux health.' }
+                }
+            }
         }
+        foreach ($check in @('dns_via_exit','docker_runtime','cold_boot','failure_closed','network_switch','sleep_resume')) {
+            $result.checks += [ordered]@{ id = $check; result = 'NOT_RUN'
+                detail = 'No executed production acceptance evidence supplied.' }
+        }
+        $result.message = 'Functional checks and full fail-closed acceptance are separate; unexecuted scenarios remain NOT_RUN.'
         return $result
     }
     if (-not $Execute) {
         $result.phase = 'preflight'; $result.message = 'Preview only. No files, network settings, or WSL runtime changed.'
-        $result.checks += [ordered]@{ id = 'strict_tailscale_boot'; result = 'BLOCKED'; detail = 'No supported synchronous host/Linux guard lifetime binding has been verified.' }
+        if ($Action -eq 'Install') {
+            $result.checks += @(Get-WslEgressPreflight $state $distributions $Backend $Distro $ProfilePath `
+                $EndpointIPv4 $EndpointPort ($PSBoundParameters.ContainsKey('EndpointPort')))
+            if (@($result.checks | Where-Object { $_.result -in @('BLOCKED','FAIL') }).Count -gt 0) {
+                $result.outcome = 'blocked'
+            }
+        }
         return $result
     }
     if (-not (Test-WslEgressAdministrator)) {
         $result.outcome = 'blocked'; $result.message = 'Run the fixed installed broker as administrator; no automatic elevation performed.'; return $result
+    }
+    if ($Action -in @('Install','Start') -and $state) {
+        try {
+            Assert-WslEgressRequestedConfiguration $state $Backend $Distro $EndpointIPv4 $EndpointPort `
+                ($PSBoundParameters.ContainsKey('EndpointPort'))
+        } catch {
+            $result.outcome = 'blocked'
+            $result.message = 'Requested configuration differs from the protected installation; refresh status and use the installed backend and profile.'
+            $result.checks += [ordered]@{ id = 'configuration_match'; result = 'BLOCKED'
+                detail = 'Explicit backend, distribution, endpoint and port overrides must match the protected profile.' }
+            return $result
+        }
     }
     if ($Action -in @('Install','Start') -and (($state -and $state.backend -eq 'Tailscale') -or (-not $state -and $Backend -eq 'Tailscale'))) {
         $result.outcome = 'blocked'; $result.phase = 'blocked'
@@ -1000,10 +1585,32 @@ function Invoke-WslEgressOperation {
             $item.state = if ($runningNames -contains $item.name) { 'running' } else { 'stopped' }
         }
         if ($Action -eq 'Install') {
-            if ($state) { throw 'Already installed. Use the existing journal; do not overwrite its snapshot.' }
+            if ($state) {
+                if ($state.phase -eq 'restored') {
+                    # Retain the old journal and Windows snapshots in a new
+                    # protected generation directory before starting over.
+                    $null = Save-WslEgressRestoredGeneration $state
+                    $state = $null
+                } elseif ($state.phase -eq 'preparing') {
+                    # The previous cutover stopped before a manager existed. A
+                    # journal cannot prove how far it got, so recover only the
+                    # recorded host changes before a fresh, fully stopped start.
+                    Restore-WslEgressPartialInstall $state
+                    $state = $null
+                }
+            }
+            if ($state) {
+                if (-not (Get-WslEgressGuardAudit $state).valid) { throw 'Existing host policy drift requires targeted recovery before installation can be adopted.' }
+                $result.outcome = 'succeeded'
+                Add-WslEgressInspection $result $state $distributions
+                $result.message = 'Existing protected installation adopted; original snapshots were preserved.'
+                return $result
+            }
             $stage = 'private_profile_validation'
             $profile = Read-WslEgressProfile $ProfilePath
             if ($profile.backend -ne 'WireGuard') { throw 'Only the strict fixed-endpoint profile can be installed.' }
+            Assert-WslEgressRequestedConfiguration $profile $Backend $Distro $EndpointIPv4 $EndpointPort `
+                ($PSBoundParameters.ContainsKey('EndpointPort'))
             if (@($distributions | Where-Object { $_.name -eq $profile.manager_distro }).Count -ne 1) { throw 'Prepare the declared manager distribution before installation.' }
             $stage = 'stopped_distribution_gate'
             if ($runningNames.Count -ne 0) { throw 'Save work and stop all WSL distributions manually before the initial cutover.' }
@@ -1020,6 +1627,8 @@ function Invoke-WslEgressOperation {
                 generation = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); backend = 'WireGuard'; phase = 'preparing'
                 manager_distro = [string]$profile.manager_distro; endpoint_ipv4 = [string]$profile.endpoint_ipv4
                 endpoint_port = [int]$profile.endpoint_port; endpoint_enabled = $false
+                expected_egress_ipv4 = $(if ($profile.PSObject.Properties['expected_egress_ipv4']) { [string]$profile.expected_egress_ipv4 } else { [string]$profile.endpoint_ipv4 })
+                uid = [int]$profile.uid; gid = [int]$profile.gid
                 linux_profile_path = (New-WslEgressUnixPath ([string]$ProfilePath))
                 before_persistent_settings = (Get-WslEgressPersistentSettings)
                 before_effective_settings = (Get-WslEgressSettings)
@@ -1027,15 +1636,21 @@ function Invoke-WslEgressOperation {
                 created_at = (Get-Date -Format o); distributions = @($distributions.name)
                 docker_backends = $dockerPaths; wslconfig = $null; distro_configs = @()
                 settings_written = $false; endpoint_rule_written = $false
+                docker_guard_written = $false; guardian_service_installed = $false
+                linux_manager_installed = $false
                 operation_id = [string]$result.operation_id
             }
             Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
             $stage = 'hyperv_guard'
             Set-WslEgressPersistentGuard $state
             $stage = 'docker_guard'
+            $state.docker_guard_write_started = $true
+            Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
             Set-WslEgressDockerGuard $state
+            $state.docker_guard_written = @($state.docker_backends).Count -gt 0
+            Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
             $stage = 'guardian_service'
-            Install-WslEgressGuardian
+            Install-WslEgressGuardian $state
             $stage = 'windows_config'
             Install-WslEgressConfig $state
             $stage = 'linux_payload'
@@ -1046,22 +1661,52 @@ function Invoke-WslEgressOperation {
             foreach ($property in $profile.PSObject.Properties) { $linuxProfile[$property.Name] = $property.Value }
             $linuxProfile['manager_distro'] = [string]$state.manager_distro
             $stage = 'linux_install'
+            $state.linux_manager_install_started = $true
+            Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
             $linux = Invoke-WslEgressLinux $state 'install' ($linuxProfile | ConvertTo-Json -Depth 12 -Compress) `
                 -AdditionalArguments @('--acknowledge-shared-guard')
             if ($linux.outcome -ne 'succeeded') { throw 'Linux install did not complete; the host guard remains closed.' }
+            $state.linux_manager_installed = $true
+            Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
             $stage = 'distro_configuration'
             Invoke-WslEgressDistroConfiguration $state $profile $distributions
             $state.phase = 'installed_closed'
+        } elseif ($Action -in @('Rollback','Uninstall') -and (Test-WslEgressPartialInstall $state) -and $RestoreOriginalNetwork) {
+            # A failure before the manager was installed has no Linux rollback
+            # endpoint. Restore the recorded Windows objects directly.
+            if ($runningNames.Count -gt 0) {
+                throw 'All WSL processes must be stopped manually before restoring host access.'
+            }
+            Restore-WslEgressPartialInstall $state
+            $result.outcome = 'succeeded'
+            $result.phase = 'restored'
+            $result.generation = [long]$state.generation
+            $result.backend = [string]$state.backend
+            $result.message = 'Partial installation recovered; original Windows network configuration restored.'
+            return $result
         } elseif (-not $state) { throw 'Not installed.' }
         elseif ($Action -eq 'Start') {
             $stage = 'host_guard_audit'
             if (-not (Get-WslEgressGuardAudit $state).valid) { throw 'Host guard is not effective.' }
-            $profile = Read-WslEgressProfile $ProfilePath
-            Assert-WslEgressProfileForState $profile $state
+            $stage = 'installed_profile_identity'
+            $profile = $null
+            if ($ProfilePath) {
+                $profile = Read-WslEgressProfile $ProfilePath
+                Assert-WslEgressProfileForState $profile $state
+            }
+            $identity = Get-WslEgressInstalledIdentity $state $profile
             $stage = 'wsl_lifetime'
-            Start-WslEgressLifetime $state $profile
+            Start-WslEgressLifetime $state $identity
             $stage = 'scope_audit'
             $attestation = Get-WslEgressScopeAttestation $state
+            foreach ($mapping in @(
+                @('all_wsl_coverage','all_distros_managed'), @('host_policy','hyperv_default_deny'),
+                @('dns_tunneling_disabled','dns_tunneling_disabled'), @('interop_guarded','interop_disabled'),
+                @('docker_desktop_isolated','docker_desktop_blocked'))) {
+                $result.checks += [ordered]@{ id = $mapping[0]
+                    result = $(if ($attestation[$mapping[1]]) { 'PASS' } else { 'FAIL' })
+                    detail = 'Current effective scope invariant audit; separate packet-level acceptance is required.' }
+            }
             if (-not $attestation.effective_audit_passed) {
                 throw 'Current WSL distro, Hyper-V, DNS-tunneling or Docker audit is incomplete; endpoint remains closed.'
             }
@@ -1086,15 +1731,42 @@ function Invoke-WslEgressOperation {
                 throw
             }
             $state.phase = 'connected_unverified'
+            $state['operation_id'] = [string]$result.operation_id
+            Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
+            $stage = 'scope_renewal_task'
+            Install-WslEgressRenewalTask $state
+            Save-WslEgressJson ([ordered]@{ schema_version = 1; generation = [long]$state.generation
+                observed_at = (Get-Date -Format o); outcome = 'succeeded'; stage = 'start'
+                expires_after_seconds = 300 }) (Join-Path $script:StateRoot 'scope-renewal.json')
         } elseif ($Action -eq 'Stop') {
             Set-WslEgressEndpoint $state $false
             $state.phase = 'installed_closed'
             Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
+            Remove-WslEgressRenewalTask $state
             if ($runningNames -contains $state.manager_distro) {
                 $null = Invoke-WslEgressLinux $state 'stop'
             }
+        } elseif ($Action -in @('Rollback','Uninstall') -and (Test-WslEgressPartialInstall $state)) {
+            # An install failure before the Linux manager exists cannot use a
+            # Linux rollback command. Keep the host closed unless the caller
+            # explicitly requests the verified Windows snapshot restore.
+            Set-WslEgressEndpoint $state $false
+            if (-not $RestoreOriginalNetwork) {
+                $state.phase = 'failed_closed_requested'
+                Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
+                $result.outcome = 'blocked'; $result.phase = $state.phase
+                $result.message = 'Partial installation remains fail-closed. Use -RestoreOriginalNetwork after stopping all WSL distributions to recover Windows-only objects.'
+                return $result
+            }
+            if ($runningNames.Count -gt 0) { throw 'All WSL processes must be stopped manually before restoring host access.' }
+            Restore-WslEgressPartialInstall $state
+            $result.outcome = 'succeeded'; $result.phase = 'restored'
+            $result.generation = [long]$state.generation; $result.backend = [string]$state.backend
+            $result.message = 'Partial installation recovered; original Windows network configuration restored.'
+            return $result
         } elseif ($Action -in @('Rollback','Uninstall')) {
             Set-WslEgressEndpoint $state $false
+            Remove-WslEgressRenewalTask $state
             if (-not $RestoreOriginalNetwork) {
                 $state.phase = 'installed_closed'
                 Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
@@ -1148,6 +1820,7 @@ function Invoke-WslEgressOperation {
             Assert-WslEgressBaseline @(Get-WslEgressBaseline)
             $state.phase = 'restored'
         }
+        $state['operation_id'] = [string]$result.operation_id
         Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
         Assert-WslEgressBaseline @(Get-WslEgressBaseline)
         $result.outcome = 'succeeded'; $result.phase = $state.phase
@@ -1171,6 +1844,13 @@ function Invoke-WslEgressOperation {
         $completionWritten = $true
         return $result
     } catch {
+        if ($stage -eq 'baseline') {
+            $result.outcome = 'blocked'
+            $result.message = 'A mandatory Windows connection is unhealthy; no network change was started.'
+            $result.checks += [ordered]@{ id = 'windows_network_preserved'; result = 'FAIL'
+                detail = 'Check the private mandatory-connection list and Windows DNS, TLS and HTTP availability before retrying.' }
+            return $result
+        }
         if ($state -and $Action -eq 'Start' -and $stage -ne 'baseline') {
             try { Set-WslEgressEndpoint $state $false } catch { }
         }
@@ -1194,6 +1874,8 @@ function Invoke-WslEgressOperation {
             detail = 'Effective default-deny and disabled endpoint readback; no packet-level inference.'
         }
         $result.checks += [ordered]@{ id = 'failure_stage'; result = 'FAIL'; detail = $stage }
+        $result.checks += [ordered]@{ id = 'recovery_action'; result = 'BLOCKED'
+            detail = (Get-WslEgressRecoveryInstruction $stage) }
         $result.checks += [ordered]@{
             id = 'exception_class'; result = 'FAIL'
             detail = $_.Exception.GetType().Name + ':line=' + [string]$_.InvocationInfo.ScriptLineNumber
@@ -1213,4 +1895,4 @@ function Invoke-WslEgressOperation {
     } finally { $mutex.ReleaseMutex(); $mutex.Dispose() }
 }
 
-Export-ModuleMember -Function Invoke-WslEgressOperation,New-WslEgressResponse,Invoke-WslEgressGuardianAudit,Test-WslEgressGuardianServicePath
+Export-ModuleMember -Function Invoke-WslEgressOperation,New-WslEgressResponse,Invoke-WslEgressGuardianAudit,Test-WslEgressGuardianServicePath,Invoke-WslEgressScopeRenewal

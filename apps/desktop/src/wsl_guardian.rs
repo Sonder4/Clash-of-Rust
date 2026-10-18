@@ -162,9 +162,10 @@ mod service {
             };
             // Keep the service alive so it can recover after a transient WSL
             // startup, but publish repeated audit failure as a service error.
-            if consecutive_failures >= 3 {
-                status(SERVICE_RUNNING, 1060);
-            }
+            status(
+                SERVICE_RUNNING,
+                if consecutive_failures >= 3 { 1060 } else { 0 },
+            );
             for _ in 0..150 {
                 if STOP.load(Ordering::SeqCst) {
                     break;

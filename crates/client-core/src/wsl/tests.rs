@@ -312,6 +312,79 @@ fn explicit_execution_and_preflight_have_separate_arguments() {
 }
 
 #[test]
+fn reconnect_uses_only_installed_state_and_install_requires_a_private_profile() {
+    let request = Request::installed(Action::Start, Backend::WireGuard, true);
+    assert_eq!(request.arguments(), Err(Error::MissingProfile));
+    let mut install = Request::installed(Action::Install, Backend::WireGuard, true);
+    assert_eq!(install.validate(), Err(Error::MissingProfile));
+    install.endpoint_ipv4 = "203.0.113.9".into();
+    install.endpoint_port = "51820".into();
+    assert_eq!(
+        install.validate(),
+        Err(Error::MissingProfile),
+        "an endpoint pair cannot replace the secret WireGuard profile"
+    );
+    install.profile_path = r"C:\Private\egress.json".into();
+    assert!(install.validate().is_ok());
+}
+
+#[test]
+fn unsupported_tailscale_cannot_request_strict_install_or_start() {
+    for action in [Action::Install, Action::Start] {
+        let mut req = request(action);
+        req.backend = Backend::Tailscale;
+        assert_eq!(req.arguments(), Err(Error::UnsupportedBackend));
+    }
+    for action in [
+        Action::Doctor,
+        Action::Status,
+        Action::Stop,
+        Action::Rollback,
+    ] {
+        assert!(
+            Request::installed(action, Backend::Tailscale, action.mutating())
+                .validate()
+                .is_ok(),
+            "inspection and closing an old deployment must remain available"
+        );
+    }
+}
+
+#[test]
+fn current_broker_diagnostics_preserve_fixed_codes_and_do_not_promote_partial_tests() {
+    let mut raw = fixture(Action::Test, 10);
+    raw["phase"] = json!("closure_unverified");
+    raw["outcome"] = json!("failed");
+    raw["checks"] = json!([
+        {"id":"scope_attestation","result":"NOT_RUN","detail":"Current-user full-scope proof renewal; expires after five minutes and is not end-to-end acceptance."},
+        {"id":"failure_stage","result":"FAIL","detail":"scope_audit"},
+        {"id":"endpoint_closure","result":"FAIL","detail":"Effective default-deny and disabled endpoint readback; no packet-level inference."},
+        {"id":"private_profile","result":"BLOCKED","detail":"secret-profile-contents-must-not-be-exported"}
+    ]);
+    let result = parse(raw);
+    assert_eq!(result.phase, "closure_unverified");
+    assert_eq!(result.checks[0].id, "scope_attestation");
+    assert_eq!(result.checks[1].detail, "scope_audit");
+    assert_eq!(result.checks[2].id, "endpoint_closure");
+    assert_eq!(result.checks[3].detail, "[redacted]");
+    assert!(!result.functional_ready());
+    assert_eq!(result.protection, Protection::Blocked);
+}
+
+#[test]
+fn installation_preflight_can_report_an_existing_backend_without_applying_the_draft() {
+    let mut state = State::default();
+    let mut req = request(Action::Install);
+    req.execute = false;
+    req.backend = Backend::Tailscale;
+    let op = state.begin(req).unwrap();
+    let report = parse(fixture(Action::Install, 10));
+    state.apply(&op, report).unwrap();
+    assert_eq!(state.report().unwrap().backend, Backend::WireGuard);
+    assert_eq!(state.protection(), Protection::Blocked);
+}
+
+#[test]
 fn original_network_restore_is_an_explicit_separate_capability() {
     for action in [
         Action::Doctor,
