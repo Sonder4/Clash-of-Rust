@@ -13,6 +13,7 @@ pub(super) enum Event {
     Input(String, String),
     Action(String, String),
     RestoreConfirmed(WslSettings),
+    #[cfg(any(windows, test))]
     ProfileSelected(Result<Option<std::path::PathBuf>, ()>),
     Finished(Operation, Box<Result<Report, Failure>>, String),
 }

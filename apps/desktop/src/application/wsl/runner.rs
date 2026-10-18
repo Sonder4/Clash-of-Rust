@@ -116,6 +116,7 @@ pub(super) async fn run(arguments: Vec<OsString>) -> Result<String, Error> {
     }
 }
 
+#[cfg(any(windows, test))]
 fn needs_elevation(arguments: &[OsString]) -> bool {
     arguments.iter().any(|argument| argument == "-Execute")
         || arguments
