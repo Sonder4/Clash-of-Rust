@@ -800,6 +800,7 @@ impl App {
                     return self.start_wsl_request(request);
                 }
             }
+            #[cfg(any(windows, test))]
             Event::ProfileSelected(result) => {
                 if !self.wsl.profile_picker_open {
                     return Task::none();
