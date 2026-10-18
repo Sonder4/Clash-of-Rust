@@ -88,6 +88,7 @@ pub(super) fn run(
                 return;
             };
             host.message(Message::Tick);
+            host.message(Message::Wsl(wsl::Event::Tick));
             if host.app.claude.session.is_some() {
                 host.message(Message::Claude(claude_view::Event::Tick));
             }
@@ -446,6 +447,8 @@ impl App {
         use rules_view::Event as R;
         let boolean = |value: &str| value == "true";
         let message = match intent {
+            Intent::WslInput => Message::Wsl(wsl::Event::Input(a.into(), b.into())),
+            Intent::WslAction => Message::Wsl(wsl::Event::Action(a.into(), b.into())),
             Intent::PickFile => {
                 if !boolean(a) {
                     self.import_open = true;

@@ -1,4 +1,5 @@
 """Windows CI, installed-package checks and Defender verification on Actions."""
+import json
 import os
 from pathlib import Path
 import re
@@ -228,6 +229,9 @@ def windows_tests(tests, bundle):
     report = {'schema': 1, 'system': 'windows', 'arch': host_arch(),
               'status': 'running', 'suites': []}
     suites = [
+        ('package-upgrade-offline', ['powershell.exe', '-NoLogo', '-NoProfile',
+                                     '-NonInteractive', '-File',
+                                     ROOT/'scripts/wsl-secure-egress/tests/package-upgrade-unit.ps1']),
         ('system-proxy-and-tun', [sys.executable, ROOT/'scripts/test-proxy-modes.py',
                                   '--test-binary', tests['core_integration'], '--bundle', bundle]),
     ]
@@ -292,9 +296,26 @@ def _verify_installed_package(package, binary, root, smoke):
              '--test-binary', smoke, '--bundle', installed])
         user_file = installed/'unrelated-user-file.txt'
         user_file.write_text('Preserve this unrelated file', encoding='utf-8')
-        # Exercise the same explicit update mode used by the client. Service
-        # replacement must finish before installation reports success.
+        # The package upgrade must retain the live shared core and its service,
+        # and commit every owned file together with a verified code backup.
+        network_before = subprocess.check_output(
+            ['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+             "(Get-CimInstance Win32_Service -Filter \"Name='ClashOfRust.Network'\").ProcessId"],
+            text=True).strip()
         _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+        network_after = subprocess.check_output(
+            ['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+             "(Get-CimInstance Win32_Service -Filter \"Name='ClashOfRust.Network'\").ProcessId"],
+            text=True).strip()
+        assert network_after == network_before, 'Update must preserve the shared Windows network service'
+        journal = json.loads((installed/'.package-update/journal.json').read_text(encoding='utf-8'))
+        assert journal['phase'] == 'committed'
+        assert journal['network_service_preserved'] is True
+        assert journal['endpoint_reopened'] is False
+        for entry in journal['files']:
+            assert sha256(Path(entry['target'])).upper() == entry['after'].upper()
+            if entry['before'] is not None:
+                assert sha256(Path(entry['backup'])).upper() == entry['before'].upper()
         assert user_file.read_text(encoding='utf-8') == 'Preserve this unrelated file'
         run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
              '--test-binary', smoke, '--bundle', installed])

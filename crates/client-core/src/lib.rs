@@ -34,6 +34,7 @@ pub mod rule_manager;
 pub mod runtime;
 pub mod subscription;
 pub mod update;
+pub mod wsl;
 
 pub const VERSION: &str = match option_env!("CLASH_OF_RUST_BUILD_VERSION") {
     Some(version) => version,

@@ -68,6 +68,8 @@ Var LegacyInstall
 Var KeepAutostart
 Var UpdateMode
 Var UpdateBackup
+Var UpdateScript
+Var NativePowerShell
 Var DeleteUserData
 Var UserDataDir
 Var DataOptionsDialog
@@ -87,6 +89,9 @@ Var DeleteDataCheckbox
 !macroend
 
 Function .onInit
+  StrCpy $NativePowerShell "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+    StrCpy $NativePowerShell "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
 !if "${APP_ARCH}" == "arm64"
   ${IfNot} ${IsNativeARM64}
     MessageBox MB_OK|MB_ICONSTOP "此安装包需要 ARM64 Windows。"
@@ -139,7 +144,9 @@ Function .onInit
     ${EndIf}
     ; Clicking Update in the client authorizes this specific upgrade.
     ${If} $UpdateMode == 1
-      Goto uninstall_existing
+      ; The updater must already have exited its GUI. Sending the ordinary
+      ; exit event here could tear down its shared Windows core lease.
+      Goto init_done
     ${EndIf}
     ; Ordinary silent reinstallation still requires explicit confirmation.
     IfSilent reinstall_silent reinstall_prompt
@@ -213,6 +220,16 @@ FunctionEnd
 
 Function RemoveExisting
   ${If} $ExistingDir != ""
+      ; Ordinary reinstall must never bypass the active-recovery uninstall
+      ; gate. Explicit /UPDATE uses a separate code-only transaction below.
+      IfFileExists "$ExistingDir\resources\wsl-secure-egress\Uninstall-Check.ps1" 0 remove_ordinary
+      ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$ExistingDir\resources\wsl-secure-egress\Uninstall-Check.ps1"' $0
+      ${If} $0 != 0
+        MessageBox MB_OK|MB_ICONSTOP "WSL 安全网络恢复状态未知。保留现有安装和恢复资料，未开始升级。"
+        SetErrorLevel 5
+        Abort
+      ${EndIf}
+      remove_ordinary:
       IfFileExists "$ExistingDir\uninstall.exe" 0 uninstall_failed
       ClearErrors
       ExecWait '"$ExistingDir\uninstall.exe" /S _?=$ExistingDir' $ResultCode
@@ -244,25 +261,27 @@ Section "Clash of Rust" MainSection
     Call RemoveExisting
   ${EndIf}
   !insertmacro CheckRunning install_
+  StrCpy $UpdateScript ""
   ${If} $UpdateMode == 1
-    ClearErrors
-    Rename "$INSTDIR\clash-of-rust.exe" "$INSTDIR\clash-of-rust.update-backup.exe"
-    ${If} ${Errors}
-      SetErrorLevel 6
-      Abort
-    ${EndIf}
-    StrCpy $UpdateBackup 1
+    InitPluginsDir
+    StrCpy $UpdateScript "$PLUGINSDIR\package\resources\wsl-secure-egress\Upgrade-Package.ps1"
+    ; Stage the complete package before touching any installed byte. The
+    ; transaction retains code backups and never uninstalls an active guard.
+    StrCpy $1 "$PLUGINSDIR\package"
+  ${Else}
+    StrCpy $1 "$INSTDIR"
   ${EndIf}
   ; Extraction failures must not look like a successful update to the helper.
   SetErrorLevel 6
   SetRegView 64
     SetShellVarContext all
   ClearErrors
-  SetOutPath "$INSTDIR"
+  SetOutPath "$1"
   File "${PAYLOAD}\clash-of-rust.exe"
   File "${PAYLOAD}\clash-tun-launcher.exe"
+  File "${PAYLOAD}\clash-wsl-guardian.exe"
   File "${PAYLOAD}\LICENSE"
-  SetOutPath "$INSTDIR\resources"
+  SetOutPath "$1\resources"
   File /oname=clash-of-rust-${APP_VERSION}.ico "${__FILEDIR__}\..\resources\icons\app.ico"
   File "${PAYLOAD}\resources\mihomo.exe"
   File "${PAYLOAD}\resources\GeoIP.dat"
@@ -274,27 +293,41 @@ Section "Clash of Rust" MainSection
   File "${PAYLOAD}\resources\default.yaml"
   File "${PAYLOAD}\resources\settings-defaults.json"
   File "${PAYLOAD}\resources\THIRD-PARTY-NOTICES.txt"
+  SetOutPath "$1\resources\wsl-secure-egress"
+  File /r "${PAYLOAD}\resources\wsl-secure-egress\*"
+  SetOutPath "$1\resources"
   File /oname=SourceHanSans-LICENSE.txt "${__FILEDIR__}\..\resources\fonts\LICENSE.txt"
   File /oname=Twemoji-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Twemoji.txt"
   File /oname=Unicode-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Unicode.txt"
-  SetOutPath "$INSTDIR\resources\ip-check"
+  SetOutPath "$1\resources\ip-check"
   File "${PAYLOAD}\resources\ip-check\LICENSE"
   File "${PAYLOAD}\resources\ip-check\SOURCE.md"
-  SetOutPath "$INSTDIR"
-  WriteUninstaller "$INSTDIR\uninstall.exe"
+  SetOutPath "$1"
+  WriteUninstaller "$1\uninstall.exe"
   ${If} ${Errors}
     Call RestoreUpdate
     SetErrorLevel 6
     Abort
   ${EndIf}
+  ${If} $UpdateMode == 1
+    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Apply -InstallationPath "$INSTDIR" -PackagePath "$PLUGINSDIR\package"' $0
+    ${If} $0 != 0
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+    StrCpy $UpdateBackup 1
+  ${EndIf}
   ; The installer's existing administrator grant registers the demand-start
   ; service once. Ordinary GUI launches and TUN switches never elevate it.
-  ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-install' $0
-  ${If} $0 != 0
-    Call RestoreUpdate
-    SetErrorLevel 6
-    Abort
+  ${If} $UpdateMode == 0
+    ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-install' $0
+    ${If} $0 != 0
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
   ${EndIf}
+  ; Update deliberately preserves the running protected Windows network
+  ; service and its core. Reinstalling it would stop shared Windows traffic.
     ${If} $KeepAutostart == 1
       ; Native helper registers a least-privilege user logon task. It preserves
       ; a Run fallback if scheduling is disabled or unavailable.
@@ -319,7 +352,12 @@ Section "Clash of Rust" MainSection
       Call CreateShortcuts
     ${EndIf}
   ${If} $UpdateBackup == 1
-    Delete "$INSTDIR\clash-of-rust.update-backup.exe"
+    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Commit -InstallationPath "$INSTDIR"' $0
+    ${If} $0 != 0
+      Call RestoreUpdate
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
     StrCpy $UpdateBackup 0
   ${EndIf}
   SetErrorLevel 0
@@ -327,9 +365,12 @@ SectionEnd
 
 Function RestoreUpdate
   ${If} $UpdateBackup == 1
-    Delete "$INSTDIR\clash-of-rust.exe"
-    Rename "$INSTDIR\clash-of-rust.update-backup.exe" "$INSTDIR\clash-of-rust.exe"
-    StrCpy $UpdateBackup 0
+    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Rollback -InstallationPath "$INSTDIR"' $0
+    ${If} $0 == 0
+      StrCpy $UpdateBackup 0
+    ${Else}
+      DetailPrint "Code rollback incomplete. Preserve .package-update and the closed WSL guard for recovery."
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 
@@ -338,6 +379,9 @@ Function .onInstFailed
 FunctionEnd
 
 Function un.onInit
+  StrCpy $NativePowerShell "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+    StrCpy $NativePowerShell "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
   SetRegView 64
   ; Neither upgrades nor ordinary silent uninstall opt into deleting data.
   StrCpy $DeleteUserData ${BST_UNCHECKED}
@@ -416,6 +460,15 @@ Section "Uninstall"
     SetShellVarContext all
   ; Always check again: the app could have started while the wizard was open.
   !insertmacro CheckRunning unsection_
+  ; An active WSL guard must retain its audited runtime and offline recovery.
+  IfFileExists "$INSTDIR\resources\wsl-secure-egress\Uninstall-Check.ps1" 0 wsl_guard_removed
+    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$INSTDIR\resources\wsl-secure-egress\Uninstall-Check.ps1" -Execute' $0
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "WSL 安全网络仍受保护或恢复状态未知。请先使用其定向回滚恢复原网络，再卸载；不会删除防护或 WSL/Docker 数据。"
+      SetErrorLevel 7
+      Abort
+    ${EndIf}
+  wsl_guard_removed:
   ; Delete only files owned by this package. Data deletion requires opt-in.
   IfFileExists "$INSTDIR\clash-tun-launcher.exe" 0 service_removed
     ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-uninstall' $0
@@ -439,6 +492,8 @@ Section "Uninstall"
   IfErrors uninstall_locked
   Delete "$INSTDIR\clash-tun-launcher.exe"
   IfErrors uninstall_locked
+  Delete "$INSTDIR\clash-wsl-guardian.exe"
+  IfErrors uninstall_locked
   Delete "$INSTDIR\resources\mihomo.exe"
   IfErrors uninstall_locked
   Delete "$INSTDIR\resources\GeoIP.dat"
@@ -454,6 +509,7 @@ Section "Uninstall"
   Delete "$INSTDIR\resources\Twemoji-LICENSE.txt"
   Delete "$INSTDIR\resources\Unicode-LICENSE.txt"
   RMDir /r "$INSTDIR\resources\ip-check"
+  RMDir /r "$INSTDIR\resources\wsl-secure-egress"
   Delete "$INSTDIR\resources\clash-of-rust-*.ico"
   RMDir "$INSTDIR\resources"
   Delete "$INSTDIR\LICENSE"

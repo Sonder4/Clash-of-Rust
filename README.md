@@ -12,6 +12,8 @@
 - **IP 检测**：183 个检测项，覆盖出口 IP、GitHub、AI 服务与流媒体地区访问；一键检测显示分类报告，点击分类或状态查看详情，支持筛选与分类重测。
 - **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，固定节点并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置，详见 [检测说明](docs/claude-region-detection.md)。
 - **便捷使用**：托盘快捷切换节点，可选显示上传与下载速度；支持后台开机自启、单实例与网络诊断，记住普通窗口尺寸；内核启动失败时可直接重试。
+- **客户端更新**：仅检查正式版，自动选择代理并回退，支持下载进度与取消；校验完成后自动安装与重启，失败时显示原因。
+- **WSL Secure Egress（定制分支）**：原生管理页提供预检、安装、连接、状态、测试、回退和卸载。Windows 原有双栈网络不变；WSL 业务流量固定经德国 VPS 的 IPv4 WireGuard 出口，IPv6 与隧道故障保持失败关闭。Tailscale 严格冷启动边界未验证前保持 BLOCKED。实现状态、限制与恢复步骤见 [WSL Secure Egress](docs/wsl-secure-egress/README.md)。
 - **客户端更新**：仅检查正式版，支持下载进度与取消；校验完成后桌面自动安装与重启，Android 由系统确认安装，失败时显示原因。
 
 ## 安装与使用
@@ -51,9 +53,24 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 编译与打包
 
-[GitHub Actions](https://github.com/Fu021/Clash-of-Rust/actions) 覆盖六种桌面系统与架构及三种 Android ABI 的编译、检查、单元测试与代理/TUN 测试；界面可使用 Slint Viewer 独立预览，无需编译桌面程序。
+可选择本地工具链或 GitHub Actions。**本地开发与验证不要求推送代码或触发工作流**；正式发布使用经过 CI 验证的产物。
 
-测试安装包：等待对应提交的 CI 成功，手动运行 **Publish Release**，填写 `ci_run_id` 并勾选 `check_only`；安装包保存在 Actions 附件中。打包直接复用 CI 产物，不再编译。正式发布使用同一工作流，详见 [工作流说明](docs/workflows.md)。
+### 选项一：本地编译与打包
+
+准备 Rust stable、Python 3.11+ 和当前平台的原生工具链：Windows 使用 MSVC；Linux 安装 C/C++、pkg-config、GLib、Fontconfig/FreeType、XKB、Wayland/X11 开发库；macOS 安装 Xcode Command Line Tools。从仓库根目录执行：
+
+```sh
+python3 scripts/prepare-resources.py
+cargo build -p clash-of-rust --bins --locked
+```
+
+桌面程序和网络助手生成在 `target/debug/`，内核与 Geo 资源生成在 `bundle/`。Windows 可用 `python` 替代 `python3`。需要 Windows EXE、Linux DEB 或 macOS DMG 时，按 [本地打包步骤](docs/workflows.md#本地打包)生成；Android 本地工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
+
+### 选项二：GitHub Actions
+
+[CI](https://github.com/Fu021/Clash-of-Rust/actions/workflows/ci.yml) 在提交 PR 或推送 main 后，完成六种桌面平台及三种 Android ABI 的编译、检查、单元测试与代理/TUN 测试。
+
+测试安装包：等待对应提交的 CI 成功，手动运行 **Publish Release**，填写 `ci_run_id` 并勾选 `check_only`；安装包保存在 Actions 附件中。打包复用 CI 产物，不再编译；正式发布流程见 [工作流说明](docs/workflows.md)。
 
 ## 开发与发布
 
@@ -65,7 +82,13 @@ Cargo workspace 分为共享业务（`crates/client-core`）、Slint 界面（`c
 python3 scripts/preview-slint.py --dialogs --pairs
 ```
 
-测试、内存基准、发布流程及手动验收说明见 [工作流文档](docs/workflows.md)。
+测试、内存基准、发布流程及手动验收说明见 [工作流文档](docs/workflows.md)。此 fork
+禁用官方自动更新，避免上游包覆盖 WSL 策略资源；升级与回退见
+[WSL 运维指南](docs/wsl-secure-egress/OPERATIONS.md)。
+
+## 参与贡献
+
+欢迎 AI 辅助的 PR；请尽量先在本地完成相关验证，并阅读[贡献者须知](.github/CONTRIBUTING.md)，了解 CI、缓存服务器与工作流变更约定。
 
 ## License
 
