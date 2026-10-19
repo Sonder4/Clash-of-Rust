@@ -35,3 +35,7 @@ No provider egress IP, Claude Code, OpenAI, Anthropic, IPv6, or DNS-through-tunn
 ## Egress-gated workspace installer
 
 The new Ubuntu 26.04 workspace installer was syntax-checked with `bash -n` and executed once while the tunnel was absent. It correctly refused with exit code `20` after `ifconfig.co` DNS failed; it did not install packages. This proves the installer cannot accidentally install or launch Claude/Codex outside the approved VPS egress.
+
+## Project UAC worker launch
+
+The project-owned `uac/Start-CorElevatedWorker.ps1` was parser-validated and invoked through Windows `sudo.exe --new-window`. The UAC request remained pending and then returned `operation cancelled by user`; `WORKER-READY.txt` was not created. The resident worker therefore remains unverified and no administrator network change was applied.
