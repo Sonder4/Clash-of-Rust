@@ -56,3 +56,21 @@ elevation cancelled: This command cannot be run due to the error: The operation 
 
 这组结果说明当前 WSL 处于受保护但未连接状态；在 UAC 成功前不能测试
 德国 VPS 出口，也不能启动 Claude Code、Codex CLI 或 Claude Desktop 的联网验收。
+
+## 2026-10-19 09:00 热重启与工具盘点
+
+执行 `wsl.exe --shutdown` 返回 `0`，随后启动 `Ubuntu-26.04`。重启后仍为
+NAT 地址 `172.19.104.128/20`、默认路由 `172.19.96.1` 和
+`nameserver 10.77.0.1`；`getent hosts api.openai.com` 返回码 `2`，
+`curl -4/-6 https://ifconfig.co/ip` 均返回码 `6`（DNS 解析失败）。
+热重启没有恢复出口，仍保持 fail-closed。
+
+重启后工具盘点：
+
+| 发行版 | Claude Code | Codex CLI | Chrome/Chromium |
+| --- | --- | --- | --- |
+| Ubuntu-22.04 | `/usr/bin/claude`, `2.1.302` | 未安装 | 未发现 |
+| Ubuntu-26.04 | 未安装 | 未安装 | 未发现 |
+
+因此 `Ubuntu-26.04` 尚未达到工具安装验收条件；安装包下载和 Claude/OpenAI
+真实 VPS 出口测试必须等待管理员隧道启动成功。
