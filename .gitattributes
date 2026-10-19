@@ -16,3 +16,8 @@ scripts/wsl-secure-egress/server/*.service text eol=lf
 *.otf binary
 resources/ip-check/cookies.txt text eol=lf
 resources/ip-check/IATACode.txt text eol=lf
+# Clash of WSL component
+clash-of-wsl/linux/*.sh text eol=lf
+clash-of-wsl/linux/*.py text eol=lf
+clash-of-wsl/linux/*.service text eol=lf
+clash-of-wsl/*.ps1 text eol=crlf
