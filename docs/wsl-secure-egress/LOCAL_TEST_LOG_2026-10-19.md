@@ -32,3 +32,27 @@ cargo test -p clash-of-rust --lib -- --skip ordinary_user_can_initialize_desktop
 - `Start -Execute` 与出口 IP 验收
 - 断隧道 / 冷启动 / 物理网络切换 fail-closed 验收
 - Windows WSL NAT 切换与 Hyper-V Firewall 实际写入
+
+## 2026-10-19 08:54-09:00 追加实机记录
+
+手动运行 `F:\Codex\admin-job\COR-Full-AdminJob.ps1`。作业进入 UAC
+请求，但系统返回：
+
+```text
+elevation cancelled: This command cannot be run due to the error: The operation was canceled by the user.
+```
+
+因此没有执行管理员阶段，也没有生成 `DONE.txt`。只读检查结果如下：
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Ubuntu-22.04/26.04 地址 | `eth0` 为 `172.19.104.128/20` |
+| 默认路由 | `172.19.96.1` |
+| DNS | `10.77.0.1`，解析失败 |
+| `curl -4/-6 ifconfig.co` | 均因 DNS 失败退出 |
+| `getent hosts api.openai.com` | 失败 |
+| `nft list tables` | 非 root 只读检查返回权限错误；未宣称 guard 通过 |
+| Hyper-V managed endpoint | 保持禁用 |
+
+这组结果说明当前 WSL 处于受保护但未连接状态；在 UAC 成功前不能测试
+德国 VPS 出口，也不能启动 Claude Code、Codex CLI 或 Claude Desktop 的联网验收。

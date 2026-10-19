@@ -42,3 +42,28 @@ elevation child exited with code 1
 ```
 
 这次运行没有生成 manifest、没有写入 Hyper-V 端点放行，也没有启动出口；Ubuntu-22.04 和 Ubuntu-26.04 已停止，当前系统仍保持默认拒绝。
+
+## 2026-10-19 08:54 实机复跑
+
+再次从普通完整性 PowerShell 手动运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File F:\Codex\admin-job\COR-Full-AdminJob.ps1
+```
+
+脚本确实进入了 `Start-Process -Verb RunAs`，系统创建了 `consent.exe`，但 UAC 最终返回取消。作业证据为：
+
+```text
+F:\Codex\admin-job\FAILED.txt
+elevation cancelled: This command cannot be run due to the error: The operation was canceled by the user.
+```
+
+`DONE.txt` 不存在，`PROGRESS.txt` 只包含普通令牌身份，未进入 ACL、包升级、broker 启动或出口验收阶段。
+
+随后进行只读 WSL 检查。Ubuntu-22.04 和 Ubuntu-26.04 均显示 NAT 网卡
+`172.19.104.128/20`，默认路由为 `172.19.96.1`，`/etc/resolv.conf` 的唯一
+解析器为 `10.77.0.1`。`curl -4/-6 https://ifconfig.co/ip` 和
+`getent hosts api.openai.com` 均因 DNS 解析失败，不能证明任何出口 IP；
+该结果符合隧道未启动时的 fail-closed 行为。当前不能把 Claude、OpenAI、
+Anthropic 或其它模型厂商的连通性标记为通过。
