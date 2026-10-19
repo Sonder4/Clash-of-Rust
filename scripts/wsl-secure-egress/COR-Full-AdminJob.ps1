@@ -75,6 +75,10 @@ function Start-SelfElevated {
     try {
         $child = Start-Process -FilePath 'powershell.exe' -Verb RunAs `
             -ArgumentList $args -PassThru -Wait -ErrorAction Stop
+        if ([int]$child.ExitCode -ne 0) {
+            Set-Content -LiteralPath $FailedPath -Value (
+                'elevation child exited with code ' + [int]$child.ExitCode)
+        }
         exit ([int]$child.ExitCode)
     } catch {
         Set-Content -LiteralPath $FailedPath -Value ('elevation cancelled: ' + $_.Exception.Message)
