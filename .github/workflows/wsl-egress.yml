@@ -71,6 +71,12 @@ jobs:
             & $powershell -NoLogo -NoProfile -NonInteractive -File $test
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Clash of WSL component self-test
+        shell: powershell
+        run: |
+          $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          & $powershell -NoLogo -NoProfile -NonInteractive -File ./clash-of-wsl/Test-ClashOfWsl.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Real WFP IPv4/IPv6 TCP/UDP loopback test
         shell: powershell
         run: ./scripts/wsl-secure-egress/tests/windows-wfp.ps1 -ExecuteIsolated | Out-File -Encoding utf8 windows-wsl-egress-results.json
