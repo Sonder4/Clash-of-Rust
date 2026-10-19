@@ -25,3 +25,9 @@ The Windows `sudo.exe --new-window` path was used because `Start-Process -Verb R
 - Main Rust library: 41 tests passed; one GUI isolation test failed because the desktop application was already running.
 
 No provider egress IP, Claude Code, OpenAI, Anthropic, IPv6, or DNS-through-tunnel result is claimed until the administrator deployment completes.
+## Hot restart after cleanup
+
+- `wsl.exe --shutdown` returned exit code `0`.
+- Ubuntu-26.04 restarted with the same NAT address `172.19.104.128/20` and gateway `172.19.96.1`.
+- The cleaned resolver persisted as `172.19.96.1`.
+- DNS lookup still failed because Hyper-V outbound default-deny remains active.
