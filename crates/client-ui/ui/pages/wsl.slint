@@ -31,7 +31,7 @@ export component WslPage inherits Rectangle {
                     Heading { text: "Clash of WSL"; }
                     Badge { text: UiData.wsl-busy ? "处理中…" : UiData.wsl-status == "cancelled" ? "已取消授权" : UiData.wsl-status == "failed" ? "检查 / 操作失败" : UiData.wsl-status == "succeeded" ? "已读取结果" : UiData.wsl-status == "blocked" ? "操作受阻" : "待检查"; tone: UiData.wsl-busy ? 2 : 4; }
                 }
-                if !UiData.wsl-supported: Paragraph { text: "仅 Windows 支持此管理入口；当前平台不可执行。"; color: Theme.warning; }
+                if !UiData.wsl-supported: Caption { text: "仅 Windows 可用"; color: Theme.warning; }
                 HorizontalLayout { spacing: Theme.content-gap;
                     WslActionButton { text: "Doctor"; action: "Doctor"; mode: "preview"; }
                     WslActionButton { text: "刷新状态"; action: "Status"; mode: "preview"; }
@@ -48,40 +48,39 @@ export component WslPage inherits Rectangle {
                     WslActionButton { text: "回退 · 保留保护"; action: "Rollback"; }
                 }
                 WslActionButton { text: "恢复原网络…"; action: "Rollback"; mode: "restore-confirm"; danger: true; }
-                Paragraph { text: "实际部署：" + UiData.wsl-deployment; font-size: Theme.detail-size; }
+                Caption { text: "部署 · " + UiData.wsl-deployment; }
                 Caption { text: UiData.wsl-monitor; }
                 Paragraph { text: UiData.wsl-message; }
-                Paragraph { text: "最近操作：" + UiData.wsl-last-operation; font-size: Theme.detail-size; color: Theme.secondary; }
-                Paragraph { text: UiData.wsl-guidance; font-size: Theme.detail-size; color: Theme.warning; }
-                Paragraph { text: "默认回退仅断开隧道、保留保护。恢复原网络会撤销保护，需另行确认，且仅允许所有 WSL 发行版均已停止时执行。"; font-size: Theme.detail-size; color: Theme.warning; }
-                Paragraph { text: "Doctor、状态与安装预检只读，不启动已停止的 WSL。安装、连接、断开与实测异步运行，需要时自动请求 Windows UAC；取消授权会显示结果，不会自动重试或撤销保护。"; font-size: Theme.detail-size; color: Theme.secondary; }
+                Caption { text: "最近 · " + UiData.wsl-last-operation; }
+                if UiData.wsl-guidance != "": Caption { text: UiData.wsl-guidance; color: Theme.warning; }
+                Caption { text: "回退保留保护；恢复原网络需确认，且所有发行版必须停止。"; color: Theme.warning; }
             }
             ContentPanel {
                 Heading { text: "安装草稿"; }
-                Paragraph { text: "这些字段仅用于首次安装与预检。已安装后的连接、断开及测试直接使用受保护的安装配置，不需要重复填写端点或密钥路径。"; font-size: Theme.detail-size; color: Theme.secondary; }
+                Caption { text: "首次安装与预检使用；后续操作读取已保护配置。"; }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Caption { text: "隧道后端"; }
                     ActionButton { text: "Tailscale · 暂不可部署"; selected: UiData.wsl-backend == "Tailscale"; enabled: false; }
                     ActionButton { text: "WireGuard"; selected: UiData.wsl-backend == "WireGuard"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting; clicked => { UiActions.dispatch(Intent.wsl-input, "backend", "WireGuard"); } }
                 }
-                Paragraph { text: "Tailscale 控制面与 DERP 使用动态地址；当前固定端点策略无法同时放行它们并证明严格隔离，因此使用 WireGuard。"; font-size: Theme.detail-size; color: Theme.warning; }
-                Caption { text: "VPS IPv4 与端口（可留空，由私密配置提供）"; }
+                Caption { text: "Tailscale 动态地址未满足严格隔离；当前使用固定端点 WireGuard。"; color: Theme.warning; }
+                Caption { text: "VPS 端点（可由私密配置提供）"; }
                 HorizontalLayout { spacing: Theme.content-gap;
                     WslInputField { text <=> UiData.wsl-endpoint-ipv4; argument: "endpoint-ipv4"; placeholder: "固定端点 IPv4"; }
                     WslInputField { width: 120px; horizontal-stretch: 0; text <=> UiData.wsl-endpoint-port; argument: "endpoint-port"; placeholder: "端口"; }
                 }
-                Caption { text: "管理发行版（可留空，使用私密配置中的 manager_distro）"; }
-                WslInputField { text <=> UiData.wsl-distro; argument: "distro"; placeholder: "例如 Ubuntu-22.04；不缩小全部 WSL 保护范围"; }
-                Caption { text: "私密 JSON 配置文件（安装必需）"; }
+                Caption { text: "管理发行版（可由私密配置提供）"; }
+                WslInputField { text <=> UiData.wsl-distro; argument: "distro"; placeholder: "例如 Ubuntu-22.04"; }
+                Caption { text: "私密 JSON 配置（安装必填）"; }
                 HorizontalLayout { spacing: Theme.content-gap;
-                    WslInputField { text <=> UiData.wsl-profile-path; argument: "profile-path"; placeholder: "例如 C:\\Private\\wsl-egress.json"; }
+                    WslInputField { text <=> UiData.wsl-profile-path; argument: "profile-path"; placeholder: "C:\\Private\\wsl-egress.json"; }
                     WslActionButton { text: "选择文件…"; action: "ChooseProfile"; mode: "preview"; }
                 }
-                Paragraph { text: "页面只保存路径，不读取或展示密钥、令牌与配置正文。选取文件后运行安装预检，管理员代理校验本地文件、JSON 和发行版。只填写地址与端口无法生成 WireGuard 密钥。"; font-size: Theme.detail-size; color: Theme.secondary; }
+                Caption { text: "仅保存路径；密钥由管理员代理校验。"; }
             }
             ContentPanel {
                 Heading { text: "管理员操作与恢复"; }
-                Paragraph { text: "客户端保持普通用户运行，仅对明确请求的管理操作自动申请 UAC。Windows 会要求本人确认；拒绝、超时和代理错误会显示在最近操作中。以下经校验的命令供故障排查与手动恢复使用。"; font-size: Theme.detail-size; color: Theme.secondary; }
+                Caption { text: "管理操作按需申请 UAC；结果显示在最近操作。"; }
                 if UiData.wsl-admin-command == "": Caption { text: "尚无手动恢复命令。"; }
                 if UiData.wsl-admin-command != "": Paragraph { text: UiData.wsl-admin-command; font-size: Theme.detail-size; }
                 if UiData.wsl-admin-command != "": ActionButton { text: "复制管理员命令"; clicked => { UiActions.dispatch(Intent.copy, UiData.wsl-admin-command, ""); } }
@@ -106,7 +105,7 @@ export component WslPage inherits Rectangle {
                     Caption { text: "功能验收"; }
                     Label { text: UiData.wsl-functional; horizontal-alignment: right; }
                 }
-                Paragraph { text: "strict 全 WSL 冷启动隔离未证明时必须 Blocked。隧道已连接、德国出口、保护已验证及功能通过分别判定；IPv4-only，IPv6 必须拒绝。"; font-size: Theme.detail-size; color: Theme.warning; }
+                Caption { text: "隧道、出口、保护、功能分别验收；IPv6 必须阻断。"; color: Theme.warning; }
             }
             ContentPanel {
                 Heading { text: "全部发行版覆盖"; }
@@ -118,8 +117,7 @@ export component WslPage inherits Rectangle {
                     Paragraph { text: "coverage: " + distro.coverage; color: Theme.secondary; font-size: Theme.detail-size; }
                 }
                 Divider { }
-                Paragraph { text: "Docker Desktop：保留发行版、镜像与卷；独立适配前外网必须封闭。实际封闭状态以本代次 coverage/checks 为准，未适配不计功能通过。"; color: Theme.warning; font-size: Theme.detail-size; }
-                Paragraph { text: "Windows 日常联网与校园认证/API 必须保留；本页不会通过关闭共享 Clash 核心、网卡或系统 DNS 来测试断连。"; color: Theme.secondary; font-size: Theme.detail-size; }
+                Caption { text: "Docker Desktop 未适配前保持封闭，不计入功能通过。"; color: Theme.warning; }
             }
             ContentPanel {
                 Heading { text: "本代次检查"; }
