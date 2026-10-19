@@ -1,7 +1,9 @@
 #!/bin/sh
 # Install the F:\WSL Ubuntu-26.04 toolchain: Chrome, Codex CLI, Claude Code CLI
-# and Claude Code Desktop. Every download is verified by the distribution's own
-# package signature or by a pinned SHA256. Run as root inside Ubuntu-26.04.
+# and Claude Code Desktop. APT repository packages are verified by APT's
+# configured signing keys; npm packages are installed by their exact version
+# specifiers and verified by their CLI version output. Run as root inside
+# Ubuntu-26.04.
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -46,6 +48,12 @@ Signed-By: /usr/share/keyrings/nodesource.gpg
 EOF
     apt-get update -qq
     apt-get install -y -qq nodejs
+    if [ "$(node --version 2>/dev/null || true)" != "${NODE_VERSION}" ]; then
+        log "NodeSource did not provide the requested ${NODE_VERSION}; refusing to continue"
+        printf 'expected Node: %s\n' "${NODE_VERSION}" >&2
+        printf 'actual Node:   %s\n' "$(node --version 2>/dev/null || echo missing)" >&2
+        return 1
+    fi
 }
 
 install_chrome() {
@@ -81,11 +89,23 @@ EOF
 }
 
 install_npm_tools() {
+    if ! command -v npm >/dev/null 2>&1; then
+        log 'npm is missing after Node.js installation'
+        return 1
+    fi
     log "installing Claude Code CLI ${CLAUDE_CODE_VERSION}"
     npm install -g --silent "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+    if ! claude --version 2>/dev/null | grep -F "${CLAUDE_CODE_VERSION}" >/dev/null; then
+        log "Claude Code did not report the requested ${CLAUDE_CODE_VERSION}"
+        return 1
+    fi
     if [ -n "${CODEX_CLI_VERSION}" ]; then
         log "installing Codex CLI ${CODEX_CLI_VERSION}"
         npm install -g --silent "@openai/codex@${CODEX_CLI_VERSION}"
+        if ! codex --version 2>/dev/null | grep -F "${CODEX_CLI_VERSION}" >/dev/null; then
+            log "Codex CLI did not report the requested ${CODEX_CLI_VERSION}"
+            return 1
+        fi
     fi
 }
 
