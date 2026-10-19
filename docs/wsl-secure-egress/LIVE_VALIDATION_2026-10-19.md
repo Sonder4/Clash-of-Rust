@@ -31,3 +31,7 @@ No provider egress IP, Claude Code, OpenAI, Anthropic, IPv6, or DNS-through-tunn
 - Ubuntu-26.04 restarted with the same NAT address `172.19.104.128/20` and gateway `172.19.96.1`.
 - The cleaned resolver persisted as `172.19.96.1`.
 - DNS lookup still failed because Hyper-V outbound default-deny remains active.
+
+## Egress-gated workspace installer
+
+The new Ubuntu 26.04 workspace installer was syntax-checked with `bash -n` and executed once while the tunnel was absent. It correctly refused with exit code `20` after `ifconfig.co` DNS failed; it did not install packages. This proves the installer cannot accidentally install or launch Claude/Codex outside the approved VPS egress.
