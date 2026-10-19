@@ -1,0 +1,9 @@
+export XUAN_CLAUDE_DE_PROXY=http://claude-de-01:ywxdHzUyhaPBI2vRozEAyEbz_zI-JsNpBqXw0pUJwVIDRDEN@127.0.0.1:18001
+export HTTP_PROXY="$XUAN_CLAUDE_DE_PROXY"
+export HTTPS_PROXY="$XUAN_CLAUDE_DE_PROXY"
+export ALL_PROXY="$XUAN_CLAUDE_DE_PROXY"
+export http_proxy="$HTTP_PROXY"
+export https_proxy="$HTTPS_PROXY"
+export all_proxy="$ALL_PROXY"
+export NO_PROXY="127.0.0.1,localhost,::1"
+export no_proxy="$NO_PROXY"

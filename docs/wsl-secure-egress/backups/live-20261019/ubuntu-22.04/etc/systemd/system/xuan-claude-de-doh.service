@@ -1,0 +1,14 @@
+[Unit]
+Description=XUAN DNS forwarder through Windows Mihomo 1053
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/sbin/xuan-doh-forwarder.py
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

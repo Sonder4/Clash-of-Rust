@@ -49,7 +49,17 @@ function Write-JobLog {
 function Test-HighIntegrity {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    $high = @($identity.Groups | Where-Object { $_.Value -eq 'S-1-16-12288' }).Count -gt 0
+    # WindowsIdentity.Groups does not reliably expose the mandatory label SID
+    # on all PowerShell/.NET combinations. Query the token through whoami,
+    # which reports the authoritative integrity SID.
+    $tokenText = (& whoami.exe /groups 2>&1 | Out-String)
+    $high = ($tokenText -match 'S-1-16-(12288|1688)')
+    if (-not $high -and $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        # A real protected write is the final fallback for localized systems
+        # whose whoami output omits the SID column.
+        $probe = Join-Path $env:ProgramFiles ('cor-admin-integrity-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        try { [IO.File]::WriteAllText($probe, 'x'); [IO.File]::Delete($probe); $high = $true } catch { }
+    }
     [pscustomobject]@{
         User = $identity.Name
         High = $high
