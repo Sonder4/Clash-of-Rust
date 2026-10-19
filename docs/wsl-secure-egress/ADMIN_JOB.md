@@ -32,3 +32,13 @@ Administrators: Group used for deny only
 因此旧作业的 ACL 修复为 `0/1`，manifest 创建失败，broker 返回 `blocked`，Ubuntu 继续保持 `nameserver 10.77.0.1` 和 nftables 默认拒绝。该结果是 fail-closed，不能当作网络验收通过。
 
 新作业已在普通令牌下用 `-NoSelfElevation` 做语法和失败门控验证，结果为退出码 `1` 并写入 `FAILED.txt`；尚未把管理员 UAC 授权视为成功，也未把未执行的出口 IP 测试标记为通过。
+
+随后从可见的管理员标题终端手动运行了新作业。该终端的实际令牌仍为
+`Medium Mandatory Level`，子进程返回码为 `1`，作业写入：
+
+```text
+identity user=XUAN\xuan high=False administrator=False
+elevation child exited with code 1
+```
+
+这次运行没有生成 manifest、没有写入 Hyper-V 端点放行，也没有启动出口；Ubuntu-22.04 和 Ubuntu-26.04 已停止，当前系统仍保持默认拒绝。
