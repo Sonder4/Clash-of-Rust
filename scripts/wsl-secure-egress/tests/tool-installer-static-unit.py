@@ -102,9 +102,11 @@ class AuthoritativeInstallerTests(unittest.TestCase):
             "claude --version",
             "codex --version",
             "google-chrome --version",
-            "claude-desktop --version",
         ):
             self.assertIn(verification, self.source)
+        # claude-desktop is a GUI binary that traps without a display, so the
+        # report reads the installed package version instead of running it.
+        self.assertIn("dpkg-query -W -f='${Version}' claude-desktop", self.source)
 
     def test_installer_has_no_legacy_proxy_or_split_dns_logic(self):
         for token in ("mihomo", "sing-box", "redsocks", "clash"):
