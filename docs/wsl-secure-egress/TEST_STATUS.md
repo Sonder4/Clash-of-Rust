@@ -838,3 +838,46 @@ The current host state is unchanged by these offline checks:
 | Ubuntu DNS and HTTPS | Blocked; fail-closed |
 | VPS IPv4, provider reachability and Claude | `NOT_RUN` |
 | UAC, stop/start, cold boot, network switch, rollback and reinstall | `NOT_RUN` |
+
+## 2026-10-22 protected staging transaction and administrator diagnosis
+
+The following checks were executed after adding the administrator-side package
+stage rebuild. No UAC prompt was opened and no repository, network or service
+ACL was changed by these tests.
+
+| Check | Result |
+| --- | --- |
+| PowerShell parser, administrator job and ACL test | PASS |
+| Administrator ACL/argv regression | PASS, 25 assertions; consent `NOT_RUN` |
+| Windows broker unit | PASS, 166 assertions |
+| Windows workflow | PASS, 244 assertions |
+| Package staging | PASS, 70 assertions |
+| Package upgrade | PASS, 53 assertions |
+| Temporary real `icacls` canonical-SID probe | PASS, exit code 0 |
+
+The real ACL probe ran against a new temporary directory and verified SYSTEM,
+Administrators and the current user. It proves that the canonical `*SID`
+arguments are accepted by this host; it did not run the administrator job or
+modify a protected project path.
+
+The latest administrator attempt obtained a High-integrity administrator
+token, then failed in Stage 1. The authoritative progress and failure files are
+`F:\Codex\admin-job\PROGRESS.txt` and `FAILED.txt`. A read-only SHA256
+comparison showed that `F:\Codex\admin-job\COR-Full-AdminJob.ps1` did not match
+the reviewed repository copy. The deployment must therefore be rerun directly
+from the reviewed worktree after this repair is committed; UAC alone does not
+prove deployment success.
+
+The administrator-side stage now rebuilds the protected package stage after
+repairing its ACL and before creating the manifest. This remains offline-only
+coverage until the full elevated transaction runs. Current live state remains:
+
+| Live item | Result |
+| --- | --- |
+| Windows WireGuard profile | `MISSING` |
+| Hyper-V endpoint | `Enabled=False` |
+| Broker | `failed_closed_requested` |
+| Ubuntu DNS and HTTPS | Blocked; fail-closed |
+| Full administrator transaction | `NOT_RUN` |
+| VPS source address and provider requests | `NOT_RUN` |
+| Chrome, Codex CLI, Claude Code CLI and Claude Desktop | `NOT_RUN` |

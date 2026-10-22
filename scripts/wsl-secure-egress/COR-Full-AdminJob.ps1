@@ -329,7 +329,23 @@ try {
     Assert-Readable (Join-Path $Repository '.git\HEAD')
     Write-JobLog 'stage 1: ACL and repository readback passed'
 
-    Write-JobLog 'stage 2: create and apply the protected package manifest'
+    Write-JobLog 'stage 2a: rebuild the stage from the reviewed repository'
+    $stageBuilder = Join-Path $Repository 'scripts\wsl-secure-egress\Prepare-PackageStage.ps1'
+    $stageBuild = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $stageBuilder,
+        '-Repository', $Repository, '-PackageStage', $PackageStage,
+        '-Execute', '-Replace'
+    ) -StageName 'PreparePackageStage'
+    $stageResponse = (($stageBuild | Out-String).Trim() | ConvertFrom-Json)
+    if ([string]$stageResponse.outcome -ne 'succeeded' -or
+        [string]$stageResponse.package_stage -ne $PackageStage -or
+        -not (Test-Path -LiteralPath (
+            Join-Path $PackageStage 'resources\wsl-secure-egress\WslSecureEgress.psm1') -PathType Leaf)) {
+        throw 'The reviewed package stage was not built and verified.'
+    }
+    Write-JobLog 'stage 2a: package stage rebuilt and receipt verified'
+
+    Write-JobLog 'stage 2b: create and apply the protected package manifest'
     $upgrade = Join-Path $Repository 'scripts\wsl-secure-egress\Upgrade-Package.ps1'
     $manifest = Join-Path $ManifestDirectory 'cor-upgrade-manifest.json'
     $create = Invoke-Native -FilePath 'powershell.exe' -Arguments @(

@@ -100,6 +100,29 @@ if ($source -notmatch 'Invoke-Wsl ''/usr/sbin/nft list tables''') {
     throw 'The nftables guard audit must run only as a host-level invariant check.'
 }
 
+# The protected staging directories intentionally reject the ordinary user.
+# The elevated transaction must rebuild the stage after repairing the staging
+# ACLs and before creating the digest that Apply trusts.
+$aclStageIndex = $source.IndexOf(
+    'Set-ProtectedDirectoryAcl -Path $PackageStage', [StringComparison]::Ordinal)
+$buildStageIndex = $source.IndexOf(
+    'Prepare-PackageStage.ps1', [StringComparison]::Ordinal)
+$manifestIndex = $source.IndexOf(
+    "'-Action', 'CreateManifest'", [StringComparison]::Ordinal)
+if ($aclStageIndex -lt 0 -or $buildStageIndex -le $aclStageIndex -or
+    $manifestIndex -le $buildStageIndex) {
+    throw 'The elevated stage build must follow the ACL repair and precede manifest creation.'
+}
+foreach ($expected in @(
+    "'-Repository', `$Repository, '-PackageStage', `$PackageStage",
+    "'-Execute', '-Replace'",
+    "'The reviewed package stage was not built and verified.'"
+)) {
+    if (-not $source.Contains($expected)) {
+        throw "Missing protected package-stage build contract: $expected"
+    }
+}
+
 # Execute the actual elevation function in an isolated runspace. The external
 # sudo program is replaced by a PowerShell function, so this verifies the
 # native argument vector without opening consent.exe or changing the host.

@@ -7,6 +7,9 @@
 /tools/
 /.local-tools/
 
+# Locally supplied application core used to build host packages
+/resources/mihomo.exe
+
 # Temporary downloads and local diagnostics
 *.partial
 *.tmp

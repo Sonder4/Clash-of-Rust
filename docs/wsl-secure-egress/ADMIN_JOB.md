@@ -6,7 +6,17 @@
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\scripts\wsl-secure-egress\COR-Full-AdminJob.ps1
+  -File F:\Codex\Clash-of-Rust-work\scripts\wsl-secure-egress\COR-Full-AdminJob.ps1
+```
+
+必须直接运行当前评审工作树中的这个文件。不要把脚本复制到其他目录后运行：
+复制件不会随 Git 更新，旧副本可能继续使用已经修复的 ACL、staging 或恢复
+逻辑。作业日志中的诊断输出和作者修改时间不能替代工作树哈希检查。每次
+管理员执行前先确认正在提交的 head 和脚本哈希：
+
+```powershell
+git status --short --branch
+Get-FileHash scripts\wsl-secure-egress\COR-Full-AdminJob.ps1 -Algorithm SHA256
 ```
 
 脚本先检查当前令牌是否同时满足管理员角色和 High integrity。中完整性令牌
@@ -34,6 +44,18 @@ fail-closed 状态并写出失败报告；历史 `DONE.txt`、UAC 弹窗出现�
 当前只读状态仍是 profile 缺失、endpoint 禁用、broker
 `failed_closed_requested`。最近没有管理员成功证据；实机事务和所有出口测试
 保持 `NOT_RUN`。
+
+## 2026-10-22 管理员令牌与旧副本诊断
+
+最近一次作业实际获得了 High integrity 管理员令牌，但在 Stage 1 ACL
+修复处失败。只读比较发现，`F:\Codex\admin-job\COR-Full-AdminJob.ps1`
+与当前仓库文件 SHA256 不同，前者是旧的工作副本。该工作副本仍会使用
+不能解析当前用户 SID 的参数形式。
+
+当前仓库所用的 canonical SID 参数已在临时目录进行真实 `icacls` 验证，
+进程返回码为 `0`，最终 ACL 包含 SYSTEM、Administrators 和当前用户。该
+验证没有修改项目目录。管理员作业尚未用最新仓库文件重新执行，因此 profile
+恢复、staging、Endpoint 和隧道仍然 `NOT_RUN`，本机继续 fail-closed。
 
 ## 2026-10-19 实机记录
 
