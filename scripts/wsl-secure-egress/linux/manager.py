@@ -684,6 +684,17 @@ def shared_guard_profile(profile):
     return policy
 
 
+def unreachable_default(route):
+    """Recognize an unreachable default route across iproute2 JSON versions.
+
+    iproute2 5.x emits the route type as its name ('unreachable'); 6.x emits
+    the numeric RTN_UNREACHABLE value ('7'). Both forms describe the same
+    kernel route, so ownership checks must accept either.
+    """
+    return (route.get('dst', 'default') == 'default' and
+            route.get('type') in ('unreachable', '7'))
+
+
 def valid_uplink_interface(name):
     """Reject Linux software/tunnel links as the cleartext WireGuard uplink."""
     if (not isinstance(name, str) or
@@ -760,8 +771,7 @@ def shared_manager_runtime_matches(policy, uplink):
                    for route in gateway_routes):
             return False
         ipv6_routes = json_command(['ip', '-6', '-j', 'route', 'show'], ns=GW)
-        if not any(route.get('dst', 'default') == 'default' and
-                   route.get('type') == 'unreachable' for route in ipv6_routes):
+        if not any(unreachable_default(route) for route in ipv6_routes):
             return False
         return True
     except (Blocked, IndexError, KeyError, TypeError, ValueError, OSError):
@@ -799,9 +809,7 @@ def shared_root_runtime_matches(policy, uplink):
                    route.get('dst', 'default') == 'default'
                    for route in routes):
             return False
-        if not any(route.get('dst') == 'default' and
-                   route.get('type') == 'unreachable'
-                   for route in routes):
+        if not any(unreachable_default(route) for route in routes):
             return False
         rules = json_command(['ip', '-4', '-j', 'rule', 'show'])
         return any(rule.get('priority') == PREF_DEFAULT_DENY and

@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -454,6 +455,68 @@ class SharedRootRuntimeTests(unittest.TestCase):
         with patch.object(manager, 'valid_uplink_interface', return_value=True), \
                 patch.object(manager, 'json_command', side_effect=bad_route):
             self.assertFalse(manager.shared_root_runtime_matches(self.policy, 'eth0'))
+
+    def test_numeric_unreachable_type_is_accepted(self):
+        # iproute2 6.x (Ubuntu 26.04) reports RTN_UNREACHABLE as the number 7
+        # instead of the name. A sibling distro must still recognize the
+        # manager's exact closed route, or it installs a global boot emergency
+        # deny on every launch.
+        def numeric(argv, ns=None, data=None, **kwargs):
+            if argv[5:] == ['show', 'table', manager.ROUTE_TABLE]:
+                return [
+                    {'dst': 'default', 'dev': manager.BUS_IF,
+                     'gateway': manager.BUS_GW_IP},
+                    {'dst': 'default', 'type': '7'},
+                ]
+            return self.kernel(argv, ns=ns, data=data, **kwargs)
+
+        with patch.object(manager, 'valid_uplink_interface', return_value=True), \
+                patch.object(manager, 'json_command', side_effect=numeric):
+            self.assertTrue(manager.shared_root_runtime_matches(self.policy, 'eth0'))
+
+    def test_unreachable_helper_accepts_both_forms(self):
+        self.assertTrue(manager.unreachable_default({'type': 'unreachable'}))
+        self.assertTrue(manager.unreachable_default({'type': '7'}))
+        self.assertFalse(manager.unreachable_default({'type': 'unicast'}))
+        self.assertFalse(manager.unreachable_default({'dst': '192.0.2.0/24',
+                                                      'type': '7'}))
+
+    def test_numeric_unreachable_type_in_gateway_namespace(self):
+        # shared_manager_runtime_matches also inspects the gateway namespace's
+        # IPv6 default route; the same version skew applies there.
+        def numeric_ipv6(argv, ns=None, data=None, **kwargs):
+            if argv == ['ip', '-6', '-j', 'route', 'show'] and ns == manager.GW:
+                return [{'dst': 'default', 'type': '7'}]
+            return kernel(argv, ns=ns, data=data, **kwargs)
+
+        def kernel(argv, ns=None, data=None, **kwargs):
+            if argv == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2']:
+                return [{'dev': 'eth0'}]
+            if argv == ['ip', '-j', 'link', 'show'] and ns == manager.TRANSPORT:
+                return [{'ifname': 'lo', 'flags': ['UP']},
+                        {'ifname': manager.NS_IF, 'flags': ['UP']}]
+            if argv == ['ip', '-j', 'link', 'show'] and ns == manager.GW:
+                return [{'ifname': 'lo', 'flags': ['UP']},
+                        {'ifname': 'wg0', 'flags': ['UP']},
+                        {'ifname': manager.GW_BUS_IF, 'flags': ['UP']}]
+            if argv == ['ip', '-j', 'link', 'show']:
+                return [{'ifname': manager.ROOT_IF, 'flags': ['UP']},
+                        {'ifname': manager.BUS_IF, 'flags': ['UP']}]
+            if argv == ['ip', '-4', '-j', 'route', 'show'] and ns == manager.TRANSPORT:
+                return [{'dst': '192.0.2.2/32', 'dev': manager.NS_IF,
+                         'gateway': manager.ROOT_IP}]
+            if argv == ['ip', '-4', '-j', 'route', 'show'] and ns == manager.GW:
+                return [{'dst': 'default', 'dev': 'wg0'}]
+            if argv == ['wg', 'show', 'wg0', 'endpoints'] and ns == manager.GW:
+                return SimpleNamespace(stdout=b'peer-key\t192.0.2.2:51820\n')
+            if argv == ['wg', 'show', 'wg0', 'allowed-ips'] and ns == manager.GW:
+                return SimpleNamespace(stdout=b'peer-key\t0.0.0.0/0\n')
+            raise AssertionError('Unexpected kernel operation: ' + repr(argv))
+
+        with patch.object(manager, 'valid_uplink_interface', return_value=True), \
+                patch.object(manager, 'command', side_effect=kernel), \
+                patch.object(manager, 'json_command', side_effect=numeric_ipv6):
+            self.assertTrue(manager.shared_manager_runtime_matches(self.policy, 'eth0'))
 
 
 class DistroRestoreTransactionTests(unittest.TestCase):
