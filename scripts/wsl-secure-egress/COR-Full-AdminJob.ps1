@@ -19,8 +19,10 @@ param(
     [string]$ManifestDirectory = 'F:\Codex\cor-upload-manifest',
     [string]$Repository = 'F:\Codex\Clash-of-Rust-work',
     [string]$JobDirectory = 'F:\Codex\admin-job',
+    [string]$VerifiedBuild = 'F:\Codex\Clash-of-Rust-work\dist\build',
     [string]$InstallationRoot = "$env:ProgramFiles\Clash of Rust WSL",
     [string]$ProfilePath = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\profile.json",
+    [string]$SnapshotRoot = 'F:\Codex\Clash-of-Rust-work\ClashOfRust-network-backups',
     [string]$TestDistro = 'Ubuntu-26.04',
     [switch]$NoSelfElevation
 )
@@ -77,8 +79,10 @@ function Start-SelfElevated {
         '-ManifestDirectory', $ManifestDirectory,
         '-Repository', $Repository,
         '-JobDirectory', $JobDirectory,
+        '-VerifiedBuild', $VerifiedBuild,
         '-InstallationRoot', $InstallationRoot,
         '-ProfilePath', $ProfilePath,
+        '-SnapshotRoot', $SnapshotRoot,
         '-TestDistro', $TestDistro,
         '-NoSelfElevation'
     )
@@ -155,6 +159,247 @@ function Assert-Readable {
         throw "Expected file is not readable: $Path"
     }
     $null = [IO.File]::OpenRead($Path)
+}
+
+function ConvertFrom-WslNativeText {
+    param([AllowNull()][object[]]$Lines)
+    # Redirected wsl.exe output is UTF-16LE. PowerShell can preserve NUL bytes
+    # as characters, so normalize them before parsing distribution names.
+    @($Lines | ForEach-Object {
+        ([string]$_).Replace([string][char]0, '').Trim()
+    } | Where-Object { $_ })
+}
+
+function Assert-AllWslStopped {
+    $result = @(& wsl.exe --list --running --quiet 2>&1)
+    $code = [int]$LASTEXITCODE
+    if ($code -ne 0) {
+        throw ('Unable to prove that every WSL distribution is stopped; ' +
+            'wsl.exe returned exit code {0}.' -f $code)
+    }
+    $running = @(ConvertFrom-WslNativeText $result)
+    if ($running.Count -ne 0) {
+        throw ('Refusing host changes while WSL is running: {0}' -f
+            ($running -join ', '))
+    }
+    [pscustomobject]@{
+        running = @()
+        checked_at = Get-Date -Format o
+    }
+}
+
+function Get-SnapshotSha256 {
+    param([Parameter(Mandatory)][string]$Path)
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '')
+        } finally {
+            $sha.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Assert-NormalDirectoryPath {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$AllowMissing
+    )
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $current = $full
+    while ($current) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                -not $item.PSIsContainer) {
+                throw ('Snapshot path is redirected or not a directory: {0}' -f
+                    $current)
+            }
+        } elseif (-not $AllowMissing) {
+            throw ('Snapshot path is missing: {0}' -f $current)
+        }
+        $parent = [IO.Path]::GetDirectoryName($current)
+        if (-not $parent -or $parent -eq $current) { break }
+        $current = $parent
+    }
+}
+
+function ConvertTo-SnapshotRecord {
+    param(
+        [AllowNull()][object[]]$Items,
+        [string[]]$Properties
+    )
+    @($Items | ForEach-Object {
+        $item = $_
+        $record = [ordered]@{}
+        foreach ($name in $Properties) {
+            $value = $item.PSObject.Properties[$name]
+            if ($value) { $record[$name] = $value.Value }
+        }
+        [pscustomobject]$record
+    })
+}
+
+function New-WslNetworkSnapshot {
+    param(
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][string]$SnapshotRoot
+    )
+    $repositoryFull = [IO.Path]::GetFullPath($Repository).TrimEnd('\')
+    $snapshotRootFull = [IO.Path]::GetFullPath($SnapshotRoot).TrimEnd('\')
+    $expectedRoot = Join-Path $repositoryFull 'ClashOfRust-network-backups'
+    if ($snapshotRootFull -ne $expectedRoot) {
+        throw 'The network snapshot root must remain inside the reviewed repository.'
+    }
+
+    Assert-NormalDirectoryPath $repositoryFull
+    Assert-NormalDirectoryPath $snapshotRootFull -AllowMissing
+    New-Item -ItemType Directory -Path $snapshotRootFull -Force | Out-Null
+    Assert-NormalDirectoryPath $snapshotRootFull
+    $snapshotDirectory = Join-Path $snapshotRootFull (
+        'admin-preflight-' + (Get-Date -Format 'yyyyMMddTHHmmssfffZ').Replace(
+            (Get-Date -Format 'yyyy'), ''))
+    New-Item -ItemType Directory -Path $snapshotDirectory -ErrorAction Stop | Out-Null
+    Set-ProtectedDirectoryAcl -Path $snapshotDirectory -KeepUserAccess
+
+    $files = [ordered]@{}
+    function Copy-SnapshotSource {
+        param([string]$Source, [string]$Destination, [string]$Name)
+        if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+            $files[$Name] = [ordered]@{ state = 'missing'; source = $Source }
+            return
+        }
+        New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force |
+            Out-Null
+        [IO.File]::WriteAllBytes($Destination, [IO.File]::ReadAllBytes($Source))
+        $sourceHash = Get-SnapshotSha256 $Source
+        $destinationHash = Get-SnapshotSha256 $Destination
+        if ($sourceHash -ne $destinationHash) {
+            throw ('Snapshot copy readback failed: {0}' -f $Name)
+        }
+        $files[$Name] = [ordered]@{
+            state = 'present'
+            source = $Source
+            destination = $Destination
+            sha256 = $destinationHash
+        }
+    }
+
+    $wslConfig = Join-Path $env:USERPROFILE '.wslconfig'
+    Copy-SnapshotSource $wslConfig (Join-Path $snapshotDirectory 'files\wslconfig') 'wslconfig'
+    $programDataRoot = Join-Path $env:ProgramData 'ClashOfRust\WslEgress'
+    foreach ($name in @('state.json', 'guardian-audit.json', 'scope-renewal.json',
+        'wslconfig.before')) {
+        Copy-SnapshotSource (Join-Path $programDataRoot $name) (
+            Join-Path $snapshotDirectory ('files\programdata\' + $name)) $name
+    }
+
+    $wslDistributions = @(& wsl.exe --list --verbose 2>&1)
+    if ([int]$LASTEXITCODE -ne 0) {
+        throw 'Unable to snapshot the WSL distribution inventory.'
+    }
+    $distributionLog = Join-Path $snapshotDirectory 'wsl-distributions.txt'
+    [IO.File]::WriteAllLines(
+        $distributionLog,
+        @(ConvertFrom-WslNativeText $wslDistributions),
+        [Text.UTF8Encoding]::new($false))
+
+    $hypervPersistentPath = Join-Path $snapshotDirectory 'hyperv-persistent.json'
+    $hypervEffectivePath = Join-Path $snapshotDirectory 'hyperv-effective.json'
+    $endpointPersistentPath = Join-Path $snapshotDirectory 'endpoint-rules-persistent.json'
+    $endpointEffectivePath = Join-Path $snapshotDirectory 'endpoint-rules-effective.json'
+    $guardianServicePath = Join-Path $snapshotDirectory 'guardian-service.json'
+    $scheduledTaskPath = Join-Path $snapshotDirectory 'renewal-task.json'
+    $settingFields = @(
+        'Name', 'Enabled', 'DefaultInboundAction', 'DefaultOutboundAction',
+        'AllowHostPolicyMerge', 'LoopbackEnabled', 'VMCreatorId'
+    )
+    $ruleFields = @(
+        'Name', 'DisplayName', 'Enabled', 'Direction', 'Action', 'Protocol',
+        'RemoteAddresses', 'RemotePorts', 'VMCreatorId', 'RulePriority'
+    )
+    $hypervPersistent = @(ConvertTo-SnapshotRecord @(
+        Get-NetFirewallHyperVVMSetting -PolicyStore PersistentStore) $settingFields)
+    $hypervEffective = @(ConvertTo-SnapshotRecord @(
+        Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore) $settingFields)
+    $endpointPersistent = @(ConvertTo-SnapshotRecord @(
+        Get-NetFirewallHyperVRule -PolicyStore PersistentStore |
+            Where-Object { $_.Name -eq 'ClashOfRust-WslEgress-Endpoint' }) $ruleFields)
+    $endpointEffective = @(ConvertTo-SnapshotRecord @(
+        Get-NetFirewallHyperVRule -PolicyStore ActiveStore |
+            Where-Object { $_.Name -eq 'ClashOfRust-WslEgress-Endpoint' }) $ruleFields)
+    $guardianService = @(ConvertTo-SnapshotRecord @(
+        Get-CimInstance Win32_Service |
+            Where-Object { $_.Name -eq 'ClashOfRust.WslEgress' }
+        ) @('Name','State','StartMode','ProcessId','PathName','StartName'))
+    $renewalTask = @(ConvertTo-SnapshotRecord @(Get-ScheduledTask `
+        -TaskName 'ClashOfRust-WslEgress-Renew' -ErrorAction SilentlyContinue) @(
+        'TaskName','TaskPath','State'))
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText(
+        $hypervPersistentPath, ($hypervPersistent | ConvertTo-Json -Depth 8), $utf8)
+    [IO.File]::WriteAllText(
+        $hypervEffectivePath, ($hypervEffective | ConvertTo-Json -Depth 8), $utf8)
+    [IO.File]::WriteAllText(
+        $endpointPersistentPath, ($endpointPersistent | ConvertTo-Json -Depth 8), $utf8)
+    [IO.File]::WriteAllText(
+        $endpointEffectivePath, ($endpointEffective | ConvertTo-Json -Depth 8), $utf8)
+    [IO.File]::WriteAllText(
+        $guardianServicePath, ($guardianService | ConvertTo-Json -Depth 8), $utf8)
+    [IO.File]::WriteAllText(
+        $scheduledTaskPath, ($renewalTask | ConvertTo-Json -Depth 8), $utf8)
+
+    foreach ($entry in @(
+        @('wsl-distributions.txt', $distributionLog),
+        @('hyperv-persistent.json', $hypervPersistentPath),
+        @('hyperv-effective.json', $hypervEffectivePath),
+        @('endpoint-rules-persistent.json', $endpointPersistentPath),
+        @('endpoint-rules-effective.json', $endpointEffectivePath),
+        @('guardian-service.json', $guardianServicePath),
+        @('renewal-task.json', $scheduledTaskPath)
+    )) {
+        $files[$entry[0]] = [ordered]@{
+            state = 'present'
+            destination = $entry[1]
+            sha256 = Get-SnapshotSha256 $entry[1]
+        }
+    }
+
+    $manifest = [ordered]@{
+        schema_version = 1
+        created_at = (Get-Date -Format o)
+        repository = $repositoryFull
+        privacy = @(
+            'wireguard-profile-excluded',
+            'private-keys-excluded',
+            'queries-excluded'
+        )
+        running_wsl = @()
+        files = $files
+    }
+    $manifestPath = Join-Path $snapshotDirectory 'manifest.json'
+    [IO.File]::WriteAllText(
+        $manifestPath, ($manifest | ConvertTo-Json -Depth 10), $utf8)
+
+    $readback = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    foreach ($name in $readback.files.PSObject.Properties.Name) {
+        $record = $readback.files.$name
+        if ($record.state -eq 'present') {
+            if (-not (Test-Path -LiteralPath $record.destination -PathType Leaf) -or
+                (Get-SnapshotSha256 $record.destination) -ne [string]$record.sha256) {
+                throw ('Network snapshot readback failed: {0}' -f $name)
+            }
+        }
+    }
+    [pscustomobject]@{
+        directory = $snapshotDirectory
+        manifest = $manifestPath
+        manifest_sha256 = Get-SnapshotSha256 $manifestPath
+        running_wsl = @()
+    }
 }
 
 function Invoke-Wsl {
@@ -304,6 +549,18 @@ try {
         Start-SelfElevated
     }
 
+    Write-JobLog 'stage 0a: require every WSL distribution to be stopped'
+    $null = Assert-AllWslStopped
+    Write-JobLog 'stage 0a: all WSL distributions are stopped'
+
+    Write-JobLog 'stage 0b: snapshot network state inside the repository'
+    $snapshot = New-WslNetworkSnapshot -Repository $Repository `
+        -SnapshotRoot $SnapshotRoot
+    $null = Assert-AllWslStopped
+    Write-JobLog 'stage 0b: all WSL distributions remained stopped during snapshot'
+    Write-JobLog ('stage 0b: snapshot={0} sha256={1}' -f
+        $snapshot.manifest, $snapshot.manifest_sha256)
+
     Write-JobLog 'stage 1a: restore the protected WireGuard profile'
     $profileRestore = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
@@ -334,6 +591,7 @@ try {
     $stageBuild = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $stageBuilder,
         '-Repository', $Repository, '-PackageStage', $PackageStage,
+        '-VerifiedBuild', $VerifiedBuild,
         '-Execute', '-Replace'
     ) -StageName 'PreparePackageStage'
     $stageResponse = (($stageBuild | Out-String).Trim() | ConvertFrom-Json)

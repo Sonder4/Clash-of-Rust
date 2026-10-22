@@ -15,6 +15,7 @@ Preview is the default. Pass -Execute to write the staging tree.
 [CmdletBinding()]
 param(
     [string]$Repository = 'F:\Codex\Clash-of-Rust-work',
+    [string]$VerifiedBuild = $null,
     [string]$PackageStage = 'F:\Codex\cor-package-stage',
     [switch]$Execute,
     [switch]$Replace
@@ -171,56 +172,107 @@ function Write-ReceiptAtomically([string]$TemporaryPath, [string]$FinalPath, [st
     }
 }
 
+function Get-VerifiedBuild([string]$Repository, [string]$BuildPath) {
+    if ([string]::IsNullOrWhiteSpace($BuildPath)) {
+        throw 'A verified Windows x64 build is required for administrator deployment.'
+    }
+    $verifier = Join-Path $Repository 'scripts\wsl-secure-egress\verify-build.py'
+    if (-not (Test-Path -LiteralPath $verifier -PathType Leaf)) {
+        throw 'The build verifier is missing.'
+    }
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $raw = @(& python.exe $verifier --repository $Repository `
+            --build $BuildPath --system windows --arch x64 2>&1)
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    $code = [int]$LASTEXITCODE
+    $text = (($raw | Out-String).Trim())
+    Write-Verbose $text
+    if ($code -ne 0) {
+        throw ('The verified build check failed: ' + $text)
+    }
+    $response = $null
+    try { $response = $text | ConvertFrom-Json } catch { }
+    if ($code -ne 0 -or -not $response -or
+        [string]$response.outcome -ne 'verified' -or
+        [string]$response.system -ne 'windows' -or
+        [string]$response.arch -ne 'x64' -or
+        [string]$response.profile -ne 'release' -or
+        [string]$response.version -ne '0.6.1') {
+        throw ('The verified build did not pass the production manifest contract: ' +
+            $text)
+    }
+    $build = [IO.Path]::GetFullPath($BuildPath).TrimEnd('\')
+    $payload = Join-Path $build 'payload'
+    foreach ($relative in @(
+        'clash-of-rust.exe',
+        'clash-tun-launcher.exe',
+        'clash-wsl-guardian.exe',
+        'LICENSE',
+        'resources\mihomo.exe'
+    )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $payload $relative) -PathType Leaf)) {
+            throw "Verified build payload is missing: $relative"
+        }
+    }
+    return [pscustomobject]@{
+        root = $build
+        payload = $payload
+        response = $response
+    }
+}
+
+$verifiedBuildResult = $null
+$binaryDirectory = $null
 try {
-    $Repository = [IO.Path]::GetFullPath($Repository).TrimEnd('\')
-    $PackageStage = [IO.Path]::GetFullPath($PackageStage).TrimEnd('\')
-    $StageParent = [IO.Path]::GetDirectoryName($PackageStage)
+    $repositoryPath = [IO.Path]::GetFullPath($Repository).TrimEnd('\')
+    $packageStagePath = [IO.Path]::GetFullPath($PackageStage).TrimEnd('\')
+    if ([string]::IsNullOrWhiteSpace($VerifiedBuild)) {
+        throw 'A verified Windows x64 build is required for administrator deployment.'
+    }
+    $StageParent = [IO.Path]::GetDirectoryName($packageStagePath)
     if (-not $StageParent) { throw 'The staging directory has no parent.' }
     Assert-NoReparseAncestor $StageParent
-    if (Test-Path -LiteralPath $PackageStage) {
-        $existingStage = Get-Item -LiteralPath $PackageStage -Force
+    if (Test-Path -LiteralPath $packageStagePath) {
+        $existingStage = Get-Item -LiteralPath $packageStagePath -Force
         if (($existingStage.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
             -not $existingStage.PSIsContainer) {
             throw 'The staging target must be a normal directory.'
         }
     }
-    $script:StageRoot = $PackageStage
-    if (-not (Test-Path -LiteralPath (Join-Path $Repository '.git\HEAD') -PathType Leaf)) {
+    $script:StageRoot = $packageStagePath
+    if (-not (Test-Path -LiteralPath (Join-Path $repositoryPath '.git\HEAD') -PathType Leaf)) {
         throw 'The repository path is not a Git worktree.'
     }
-    if ($PackageStage -eq $Repository -or
-        $PackageStage.StartsWith($Repository + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    if ($packageStagePath -eq $repositoryPath -or
+        $packageStagePath.StartsWith($repositoryPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The staging directory must be outside the repository.'
     }
-    if ($PackageStage -eq $StageParent -or
-        [IO.Path]::GetPathRoot($PackageStage).TrimEnd('\') -eq $PackageStage) {
+    if ($packageStagePath -eq $StageParent -or
+        [IO.Path]::GetPathRoot($packageStagePath).TrimEnd('\') -eq $packageStagePath) {
         throw 'Unsafe staging path.'
     }
 
     $records = [ordered]@{}
-    $receiptPath = $PackageStage + '.stage-receipt.json'
+    $receiptPath = $packageStagePath + '.stage-receipt.json'
     $receiptTemporaryPath = $receiptPath + '.pending'
     Assert-NormalReceiptPath $receiptPath
     Assert-NormalReceiptPath $receiptTemporaryPath
+    $verifiedBuildResult = Get-VerifiedBuild -Repository $repositoryPath `
+        -BuildPath $VerifiedBuild
+    if ($null -eq $verifiedBuildResult) {
+        throw 'The verified build returned no result.'
+    }
+    $binaryDirectory = [string]$verifiedBuildResult.payload
     if ($Execute) {
-        $release = Join-Path $Repository 'target\release'
-        $debug = Join-Path $Repository 'target\debug'
-        $binaryDirectory = if ((Test-Path -LiteralPath (Join-Path $release 'clash-of-rust.exe')) -and
-            (Test-Path -LiteralPath (Join-Path $release 'clash-tun-launcher.exe')) -and
-            (Test-Path -LiteralPath (Join-Path $release 'clash-wsl-guardian.exe'))) {
-            $release
-        } elseif ((Test-Path -LiteralPath (Join-Path $debug 'clash-of-rust.exe')) -and
-            (Test-Path -LiteralPath (Join-Path $debug 'clash-tun-launcher.exe')) -and
-            (Test-Path -LiteralPath (Join-Path $debug 'clash-wsl-guardian.exe'))) {
-            $debug
-        } else {
-            throw 'No complete Clash of Rust debug or release binary set is available.'
-        }
         $sources = [ordered]@{
             'clash-of-rust.exe' = Join-Path $binaryDirectory 'clash-of-rust.exe'
             'clash-tun-launcher.exe' = Join-Path $binaryDirectory 'clash-tun-launcher.exe'
             'clash-wsl-guardian.exe' = Join-Path $binaryDirectory 'clash-wsl-guardian.exe'
-            'LICENSE' = Join-Path $Repository 'LICENSE'
+            'LICENSE' = Join-Path $repositoryPath 'LICENSE'
             'uninstall.exe' = Join-Path 'C:\Program Files\Clash of Rust' 'uninstall.exe'
         }
         foreach ($entry in $sources.GetEnumerator()) {
@@ -228,14 +280,14 @@ try {
                 throw "Required staging source is missing: $($entry.Key) ($($entry.Value))"
             }
         }
-        if (Test-Path -LiteralPath $PackageStage) {
+        if (Test-Path -LiteralPath $packageStagePath) {
             if (-not $Replace) {
                 throw 'The staging directory already exists. Pass -Replace after reviewing it.'
             }
-            $resolved = (Resolve-Path -LiteralPath $PackageStage).Path.TrimEnd('\')
+            $resolved = (Resolve-Path -LiteralPath $packageStagePath).Path.TrimEnd('\')
             $resolvedItem = Get-Item -LiteralPath $resolved -Force
             if ($resolvedItem.Attributes -band [IO.FileAttributes]::ReparsePoint -or
-                $resolved -ne $PackageStage -or
+                $resolved -ne $packageStagePath -or
                 [IO.Path]::GetPathRoot($resolved).TrimEnd('\') -eq $resolved) {
                 throw 'Unsafe staging replacement path.'
             }
@@ -246,43 +298,47 @@ try {
         # Invalidate prior transaction metadata before replacing its stage.
         Remove-NormalFileIfPresent $receiptPath
         Remove-NormalFileIfPresent $receiptTemporaryPath
-        New-Item -ItemType Directory -Path $PackageStage -Force | Out-Null
+        New-Item -ItemType Directory -Path $packageStagePath -Force | Out-Null
         $stageCreatedByThisRun = $true
         # The stage is now owned by this run. A non-directory or reparse-point
         # produced by a race is rejected and the receipt remains absent.
-        $createdStageItem = Get-Item -LiteralPath $PackageStage -Force
+        $createdStageItem = Get-Item -LiteralPath $packageStagePath -Force
         if (($createdStageItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
             -not $createdStageItem.PSIsContainer) {
             throw 'The created staging target is unsafe.'
         }
         try {
             foreach ($entry in $sources.GetEnumerator()) {
-                Copy-VerifiedFile $entry.Value (Join-Path $PackageStage $entry.Key) $records
+                Copy-VerifiedFile $entry.Value (Join-Path $packageStagePath $entry.Key) $records
             }
-            Copy-VerifiedTree (Join-Path $Repository 'resources') (Join-Path $PackageStage 'resources') `
+            Copy-VerifiedTree (Join-Path $repositoryPath 'resources') (Join-Path $packageStagePath 'resources') `
                 @() @('mihomo.exe') $records
             # mihomo.exe is required by Upgrade-Package's fixed destination contract.
-            Copy-VerifiedFile (Join-Path $Repository 'resources\mihomo.exe') `
-                (Join-Path $PackageStage 'resources\mihomo.exe') $records
-            Copy-VerifiedTree (Join-Path $Repository 'scripts\wsl-secure-egress') `
-                (Join-Path $PackageStage 'resources\wsl-secure-egress') `
+            Copy-VerifiedFile (Join-Path $binaryDirectory 'resources\mihomo.exe') `
+                (Join-Path $packageStagePath 'resources\mihomo.exe') $records
+            Copy-VerifiedTree (Join-Path $repositoryPath 'scripts\wsl-secure-egress') `
+                (Join-Path $packageStagePath 'resources\wsl-secure-egress') `
                 @('linux', 'server') @('Restore-WslEgressProfile.ps1') $records
-            Copy-VerifiedFile (Join-Path $Repository 'scripts\wsl-secure-egress\Restore-WslEgressProfile.ps1') `
-                (Join-Path $PackageStage 'resources\wsl-secure-egress\Restore-WslEgressProfile.ps1') $records
-            Assert-StagingWhitelist $PackageStage
+            Copy-VerifiedFile (Join-Path $repositoryPath 'scripts\wsl-secure-egress\Restore-WslEgressProfile.ps1') `
+                (Join-Path $packageStagePath 'resources\wsl-secure-egress\Restore-WslEgressProfile.ps1') $records
+            Assert-StagingWhitelist $packageStagePath
         } catch {
-            Remove-CreatedStage $PackageStage
+            Remove-CreatedStage $packageStagePath
             Remove-NormalFileIfPresent $receiptTemporaryPath
             throw
         }
         $receipt = [ordered]@{
             schema_version = 1
-            repository = $Repository
+            repository = $repositoryPath
+            verified_build = $verifiedBuildResult.root
+            build_manifest_sha256 = [string]$verifiedBuildResult.response.manifest_sha256
+            build_commit = [string]$verifiedBuildResult.response.commit
+            build_version = [string]$verifiedBuildResult.response.version
             binary_directory = $binaryDirectory
             created_at = (Get-Date -Format o)
             files = $records
         }
-        if ($receiptPath.StartsWith($PackageStage + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        if ($receiptPath.StartsWith($packageStagePath + '\', [StringComparison]::OrdinalIgnoreCase)) {
             throw 'The staging receipt must be outside the package stage.'
         }
         try {
@@ -292,7 +348,7 @@ try {
                 ($receipt | ConvertTo-Json -Depth 6)
         } catch {
             if ($stageCreatedByThisRun) {
-                Remove-CreatedStage $PackageStage
+                Remove-CreatedStage $packageStagePath
                 $stageCreatedByThisRun = $false
             }
             if (Test-Path -LiteralPath $receiptTemporaryPath) {
@@ -308,10 +364,13 @@ try {
         action = 'prepare-package-stage'
         outcome = $(if ($Execute) { 'succeeded' } else { 'not_run' })
         executed = $Execute.IsPresent
-        repository = $Repository
-        package_stage = $PackageStage
+        repository = $repositoryPath
+        package_stage = $packageStagePath
         receipt_path = $(if ($Execute) { $receiptPath } else { $null })
         binary_directory = $(if ($Execute) { $binaryDirectory } else { $null })
+        verified_build = $verifiedBuildResult.root
+        build_manifest_sha256 = [string]$verifiedBuildResult.response.manifest_sha256
+        build_commit = [string]$verifiedBuildResult.response.commit
         files = $records.Count
         secrets_copied = $false
     } | ConvertTo-Json -Compress
@@ -321,7 +380,7 @@ try {
 } catch {
     $primaryError = $_
     if ($stageCreatedByThisRun) {
-        try { Remove-CreatedStage $PackageStage }
+        try { Remove-CreatedStage $packageStagePath }
         catch {
             [ordered]@{
                 schema_version = 1

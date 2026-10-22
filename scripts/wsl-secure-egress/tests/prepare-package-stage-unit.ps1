@@ -7,6 +7,9 @@ $ErrorActionPreference = 'Stop'
 $scriptPath = Join-Path $PSScriptRoot '..\Prepare-PackageStage.ps1'
 $upgradePath = Join-Path $PSScriptRoot '..\Upgrade-Package.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('cor-package-stage-' + [guid]::NewGuid().ToString('N'))
+$stage = Join-Path $testRoot 'stage'
+$expectedReceipt = $stage + '.stage-receipt.json'
+$stageBackup = $stage + '.before-receipt-test'
 $assertions = 0
 $failures = [Collections.Generic.List[string]]::new()
 
@@ -21,12 +24,16 @@ function Invoke-Fixture(
     [string]$Fixture,
     [string]$Repo,
     [string]$Stage,
+    [string]$Build,
     [switch]$Execute,
     [switch]$Replace
 ) {
     $arguments = @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', $Fixture, '-Repository', $Repo, '-PackageStage', $Stage)
+    if (-not [string]::IsNullOrWhiteSpace($Build)) {
+        $arguments += @('-VerifiedBuild', $Build)
+    }
     if ($Execute) { $arguments += '-Execute' }
     if ($Replace) { $arguments += '-Replace' }
     $previousPreference = $ErrorActionPreference
@@ -76,22 +83,25 @@ try {
     Assert-True ($errors.Count -eq 0) 'Package stage script must parse.'
 
     $repo = Join-Path $testRoot 'repo'
-    $debug = Join-Path $repo 'target\debug'
     $resources = Join-Path $repo 'resources'
     $module = Join-Path $repo 'scripts\wsl-secure-egress'
     $linux = Join-Path $module 'linux'
     $server = Join-Path $module 'server'
     foreach ($path in @(
-        (Join-Path $repo '.git'), $debug, $resources, $module, $linux, $server)) {
+        (Join-Path $repo '.git'), $resources, $module, $linux, $server)) {
         $null = New-Item -ItemType Directory -Path $path -Force
     }
     [IO.File]::WriteAllText((Join-Path $repo '.git\HEAD'), 'ref: refs/heads/test')
-    foreach ($name in @('clash-of-rust.exe', 'clash-tun-launcher.exe', 'clash-wsl-guardian.exe')) {
-        [IO.File]::WriteAllText((Join-Path $debug $name), "binary-$name")
-    }
     [IO.File]::WriteAllText((Join-Path $repo 'LICENSE'), 'license')
     [IO.File]::WriteAllText((Join-Path $resources 'resource.dat'), 'resource')
     [IO.File]::WriteAllText((Join-Path $resources 'mihomo.exe'), 'mihomo')
+    $scriptsDirectory = Join-Path $repo 'scripts'
+    $null = New-Item -ItemType Directory -Path $scriptsDirectory -Force
+    foreach ($name in @('workflow_artifacts.py', 'build_support.py')) {
+        $sourceScript = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')) ('scripts\' + $name)
+        Copy-Item -LiteralPath $sourceScript `
+            -Destination (Join-Path $scriptsDirectory $name)
+    }
     foreach ($name in @('WslSecureEgress.psm1', 'Upgrade-Package.ps1',
             'Restore-WslEgressProfile.ps1')) {
         [IO.File]::WriteAllText((Join-Path $module $name), "module-$name")
@@ -103,6 +113,85 @@ try {
     $null = New-Item -ItemType Directory -Path $programFiles -Force
     [IO.File]::WriteAllText((Join-Path $programFiles 'uninstall.exe'), 'uninstall')
 
+    $testRoot = [IO.Path]::GetFullPath($testRoot)
+    $build = Join-Path $testRoot 'verified-build'
+    $payload = Join-Path $build 'payload'
+    $payloadResources = Join-Path $payload 'resources'
+    $buildTests = Join-Path $build 'tests'
+    foreach ($path in @($payloadResources, $buildTests)) {
+        $null = New-Item -ItemType Directory -Path $path -Force
+    }
+    foreach ($name in @('clash-of-rust.exe', 'clash-tun-launcher.exe',
+            'clash-wsl-guardian.exe')) {
+        [IO.File]::WriteAllText((Join-Path $payload $name), "binary-$name")
+    }
+    [IO.File]::WriteAllText((Join-Path $payload 'LICENSE'), 'license')
+    foreach ($name in @('mihomo.exe', 'core.json', 'geodata.json', 'GeoIP.dat',
+            'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb')) {
+        [IO.File]::WriteAllText((Join-Path $payloadResources $name), "resource-$name")
+    }
+    $wslBuild = Join-Path $payloadResources 'wsl-secure-egress'
+    foreach ($name in @('WslSecureEgress.psm1', 'Upgrade-Package.ps1',
+            'Restore-WslEgressProfile.ps1')) {
+        $target = Join-Path $wslBuild $name
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
+        [IO.File]::WriteAllText($target, "module-$name")
+    }
+    foreach ($name in @('manager.py')) {
+        $target = Join-Path $wslBuild "linux\$name"
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
+        [IO.File]::WriteAllText($target, "linux-$name")
+    }
+    foreach ($name in @('manage.py')) {
+        $target = Join-Path $wslBuild "server\$name"
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
+        [IO.File]::WriteAllText($target, "server-$name")
+    }
+    [IO.File]::WriteAllText((Join-Path $buildTests 'core_integration.exe'), 'test')
+    $files = [ordered]@{}
+    foreach ($file in @(Get-ChildItem -LiteralPath $build -Recurse -File)) {
+        if ($file.FullName -eq (Join-Path $build 'manifest.json')) { continue }
+        $relative = $file.FullName.Substring($build.Length + 1).Replace('\', '/')
+        $files[$relative] = [ordered]@{
+            sha256 = (Get-Hash $file.FullName).ToLowerInvariant()
+            size = $file.Length
+            executable = $relative -match '(?:\.exe|^tests/)'
+        }
+    }
+    $fakeCommit = ('a' * 40)
+    $fakeLockHash = ('b' * 64)
+    [IO.File]::WriteAllText(
+        (Join-Path $build 'manifest.json'),
+        ([ordered]@{
+            schema = 2
+            commit = $fakeCommit
+            version = '0.6.1'
+            system = 'windows'
+            arch = 'x64'
+            profile = 'release'
+            cargo_lock_sha256 = $fakeLockHash
+            rustc = 'fixture'
+            tests = [ordered]@{ core_integration = 'tests/core_integration.exe' }
+            files = $files
+        } | ConvertTo-Json -Depth 8))
+
+    # The production verifier is replaced by a source-equal fixture that
+    # validates the same manifest and hash contract without requiring native
+    # PE inspection. Native verification runs in the CI workflow.
+    $verifierPath = Join-Path $module 'verify-build.py'
+    $verifierSource = @'
+import argparse, hashlib, json
+from pathlib import Path
+p=argparse.ArgumentParser(); p.add_argument('--repository'); p.add_argument('--build'); p.add_argument('--system'); p.add_argument('--arch'); a=p.parse_args()
+b=Path(a.build); m=json.loads((b/'manifest.json').read_text())
+assert (m['system'],m['arch'],m['profile'],m['version']) == ('windows','x64','release','0.6.1')
+for rel, rec in m['files'].items():
+    path=b/rel
+    assert path.is_file() and path.stat().st_size == rec['size']
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == rec['sha256']
+print(json.dumps({'schema_version':1,'outcome':'verified','commit':m['commit'],'version':m['version'],'system':m['system'],'arch':m['arch'],'profile':m['profile'],'manifest_sha256':hashlib.sha256((b/'manifest.json').read_bytes()).hexdigest(),'files':len(m['files']),'source_artifact':None}))
+'@
+    [IO.File]::WriteAllText($verifierPath, $verifierSource)
     # The production script resolves the installed uninstaller from Program
     # Files directly. This harness runs a source-equal copy whose only change is
     # that fixed fixture path; package copying and receipt behavior stay live.
@@ -113,17 +202,17 @@ try {
         "'$($programFiles.Replace("'", "''"))' 'uninstall.exe'")
     [IO.File]::WriteAllText($harnessScript, $source, (New-Object Text.UTF8Encoding($false)))
 
-    $stage = Join-Path $testRoot 'stage'
-    $preview = Invoke-Fixture $harnessScript $repo $stage
+    $preview = Invoke-Fixture $harnessScript $repo $stage $build
+    $preview | ConvertTo-Json -Depth 4 | Write-Host
     Assert-True ($preview.ExitCode -eq 0) 'Preview must exit successfully.'
     Assert-True ((Get-ResponseOutcome $preview.Response) -eq 'not_run') 'Preview must report not_run.'
     Assert-True (-not (Test-Path -LiteralPath $stage)) 'Preview must not create staging.'
 
-    $executed = Invoke-Fixture $harnessScript $repo $stage -Execute
+    $executed = Invoke-Fixture $harnessScript $repo $stage $build -Execute
+    $executed | ConvertTo-Json -Depth 4 | Write-Host
     $response = $executed.Response
     Assert-True ($executed.ExitCode -eq 0) 'Execute must exit successfully.'
     Assert-True ((Get-ResponseOutcome $response) -eq 'succeeded') 'Execute must report success.'
-    $expectedReceipt = $stage + '.stage-receipt.json'
     Assert-True ([string]$response.receipt_path -eq $expectedReceipt) 'Receipt path must be reported.'
     Assert-True (Test-Path -LiteralPath $expectedReceipt -PathType Leaf) 'Receipt must be written beside staging.'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $stage 'stage-receipt.json'))) `
@@ -154,6 +243,9 @@ try {
 
     $receipt = Get-Content -LiteralPath $expectedReceipt -Raw | ConvertFrom-Json
     Assert-True ($receipt.schema_version -eq 1) 'Receipt schema must be stable.'
+    Assert-True ([string]$receipt.build_commit -eq $fakeCommit) 'Receipt must bind the source commit.'
+    Assert-True ([string]$receipt.build_version -eq '0.6.1') 'Receipt must bind the source version.'
+    Assert-True ([string]$receipt.verified_build -eq $build) 'Receipt must bind the verified build.'
     foreach ($property in $receipt.files.PSObject.Properties) {
         $relative = [string]$property.Name
         $path = Join-Path $stage $relative
@@ -169,7 +261,7 @@ try {
     # receipt would otherwise attest to a stage that no longer exists.
     $invalidResource = Join-Path $resources 'bad name.dat'
     [IO.File]::WriteAllText($invalidResource, 'outside-whitelist')
-    $failure = Invoke-Fixture $harnessScript $repo $stage -Execute -Replace
+    $failure = Invoke-Fixture $harnessScript $repo $stage $build -Execute -Replace
     Assert-ExplicitFailure $failure 'A failed replacement must fail explicitly.'
     Assert-True (-not (Test-Path -LiteralPath $expectedReceipt)) `
         'A failed replacement must not leave its prior success receipt.'
@@ -180,7 +272,7 @@ try {
     Remove-Item -LiteralPath $invalidResource -Force
 
     # Recreate a verified stage for the final successful contract checks.
-    $executedAgain = Invoke-Fixture $harnessScript $repo $stage -Execute
+    $executedAgain = Invoke-Fixture $harnessScript $repo $stage $build -Execute
     Assert-True ($executedAgain.ExitCode -eq 0) 'Stage fixture must be recreated after failure tests.'
     Assert-True (Test-Path -LiteralPath $expectedReceipt -PathType Leaf) `
         'A successful retry must recreate the external receipt.'
@@ -193,7 +285,7 @@ try {
     [IO.File]::Delete($extra)
 
     $stageInsideRepo = Join-Path $repo 'stage'
-    $failure = Invoke-Fixture $harnessScript $repo $stageInsideRepo -Execute
+    $failure = Invoke-Fixture $harnessScript $repo $stageInsideRepo $build -Execute
     Assert-ExplicitFailure $failure 'Staging inside repository must fail.'
     Assert-True (-not (Test-Path -LiteralPath $stageInsideRepo)) 'Refused staging must not be created.'
 
@@ -209,7 +301,7 @@ try {
     }
     if ($linkCreated) {
         $redirectedStage = Join-Path $link 'stage'
-        $failure = Invoke-Fixture $harnessScript $repo $redirectedStage -Execute
+        $failure = Invoke-Fixture $harnessScript $repo $redirectedStage $build -Execute
         Assert-ExplicitFailure $failure 'A staging path below a reparse point must fail.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $redirected 'clash-of-rust.exe'))) `
             'Redirected destination must remain unwritten.'
@@ -218,17 +310,16 @@ try {
         $junctionStage = Join-Path $testRoot 'junction-stage'
         $null = New-Item -ItemType Directory -Path $junctionStageTarget
         $null = New-Item -ItemType Junction -Path $junctionStage -Target $junctionStageTarget
-        $failure = Invoke-Fixture $harnessScript $repo $junctionStage -Execute
+        $failure = Invoke-Fixture $harnessScript $repo $junctionStage $build -Execute
         Assert-ExplicitFailure $failure 'A staging target that is a junction must fail.'
         Assert-True (@(Get-ChildItem -LiteralPath $junctionStageTarget -Force).Count -eq 0) `
             'A refused junction target must not be cleaned through.'
 
         $receiptLink = $expectedReceipt
         Remove-Item -LiteralPath $receiptLink -Force
-        $stageBackup = $stage + '.before-receipt-test'
         Move-Item -LiteralPath $stage -Destination $stageBackup
         $null = New-Item -ItemType Junction -Path $receiptLink -Target $redirected
-        $failure = Invoke-Fixture $harnessScript $repo $stage -Execute
+        $failure = Invoke-Fixture $harnessScript $repo $stage $build -Execute
         Assert-ExplicitFailure $failure 'A redirected receipt target must fail.'
         Assert-True (-not (Test-Path -LiteralPath $stage)) 'A failed receipt write must remove its stage.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $redirected 'stage-receipt.json'))) `
@@ -236,27 +327,22 @@ try {
         # Remove the junction before restoring the prior stage.
         Remove-Item -LiteralPath $receiptLink -Recurse -Force
         Move-Item -LiteralPath $stageBackup -Destination $stage
-        $executedAfterJunction = Invoke-Fixture $harnessScript $repo $stage -Execute -Replace
+        $executedAfterJunction = Invoke-Fixture $harnessScript $repo $stage $build -Execute -Replace
         Assert-True ($executedAfterJunction.ExitCode -eq 0) `
             'A restored stage path must remain usable after a junction failure.'
     }
 
     $brokenRepo = Join-Path $testRoot 'broken-repo'
-    $brokenDebug = Join-Path $brokenRepo 'target\debug'
     $brokenResources = Join-Path $brokenRepo 'resources'
     $brokenModule = Join-Path $brokenRepo 'scripts\wsl-secure-egress'
     $brokenLinux = Join-Path $brokenModule 'linux'
     $brokenServer = Join-Path $brokenModule 'server'
     foreach ($path in @(
-        (Join-Path $brokenRepo '.git'), $brokenDebug, $brokenResources,
+        (Join-Path $brokenRepo '.git'), $brokenResources,
         $brokenModule, $brokenLinux, $brokenServer)) {
         $null = New-Item -ItemType Directory -Path $path -Force
     }
     [IO.File]::WriteAllText((Join-Path $brokenRepo '.git\HEAD'), 'ref: refs/heads/test')
-    foreach ($name in @('clash-of-rust.exe', 'clash-tun-launcher.exe',
-            'clash-wsl-guardian.exe')) {
-        [IO.File]::WriteAllText((Join-Path $brokenDebug $name), "binary-$name")
-    }
     [IO.File]::WriteAllText((Join-Path $brokenRepo 'LICENSE'), 'license')
     [IO.File]::WriteAllText((Join-Path $brokenResources 'resource.dat'), 'resource')
     [IO.File]::WriteAllText((Join-Path $brokenResources 'mihomo.exe'), 'mihomo')
@@ -268,7 +354,7 @@ try {
     $expectedRestore = Join-Path $brokenModule 'Restore-WslEgressProfile.ps1'
     $null = New-Item -ItemType Junction -Path $expectedRestore -Target $repo
     $brokenStage = Join-Path $testRoot 'broken-stage'
-    $failure = Invoke-Fixture $harnessScript $brokenRepo $brokenStage -Execute
+    $failure = Invoke-Fixture $harnessScript $brokenRepo $brokenStage $build -Execute
     Assert-ExplicitFailure $failure 'A redirected package source must fail.'
     Assert-True (-not (Test-Path -LiteralPath $brokenStage)) 'A failed partial build must be removed.'
     Assert-True (-not (Test-Path -LiteralPath ($brokenStage + '.stage-receipt.json'))) `
@@ -283,7 +369,6 @@ try {
 } finally {
     $redirectedLink = Join-Path $testRoot 'redirected-link'
     $redirectedReceipt = $expectedReceipt
-    $stageBackup = $stage + '.before-receipt-test'
     $brokenRestoreLink = Join-Path $testRoot 'broken-repo\scripts\wsl-secure-egress\Restore-WslEgressProfile.ps1'
     foreach ($linkPath in @($redirectedLink, $redirectedReceipt, $brokenRestoreLink)) {
         if (Test-Path -LiteralPath $linkPath) {

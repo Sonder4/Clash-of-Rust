@@ -13,6 +13,77 @@ if (@($errors).Count -ne 0) {
 }
 
 $source = Get-Content -LiteralPath $jobPath -Raw
+
+# The host transaction must prove that no WSL distribution is running before
+# restoring a profile, repairing ACLs, staging files or changing firewall
+# policy. A redirected wsl.exe list is UTF-16LE on Windows; the parser must
+# remove preserved NUL bytes instead of interpreting empty padding as a name.
+$convertStart = $source.IndexOf('function ConvertFrom-WslNativeText', [StringComparison]::Ordinal)
+$guardStart = $source.IndexOf('function Assert-AllWslStopped', [StringComparison]::Ordinal)
+$guardEnd = $source.IndexOf("`nfunction ", $guardStart + 1, [StringComparison]::Ordinal)
+if ($convertStart -lt 0 -or $guardStart -le $convertStart -or $guardEnd -le $guardStart) {
+    throw 'The all-WSL-stopped gate functions were not found.'
+}
+$guardSource = $source.Substring($convertStart, $guardEnd - $convertStart)
+foreach ($expected in @(
+    'wsl.exe --list --running --quiet',
+    'wsl.exe returned exit code',
+    'Refusing host changes while WSL is running',
+    'Replace([string][char]0'
+)) {
+    if (-not $guardSource.Contains($expected)) {
+        throw "Missing all-WSL-stopped guard contract: $expected"
+    }
+}
+
+$transactionStart = $source.IndexOf("`ntry {", [StringComparison]::Ordinal)
+$profileRestore = $source.IndexOf(
+    'stage 1a: restore the protected WireGuard profile', $transactionStart,
+    [StringComparison]::Ordinal)
+$stopGate = $source.IndexOf(
+    'stage 0a: require every WSL distribution to be stopped', $transactionStart,
+    [StringComparison]::Ordinal)
+$snapshotGate = $source.IndexOf(
+    'stage 0b: snapshot network state inside the repository', $transactionStart,
+    [StringComparison]::Ordinal)
+$selfElevation = $source.IndexOf('Start-SelfElevated', $transactionStart,
+    [StringComparison]::Ordinal)
+if ($stopGate -lt 0 -or $snapshotGate -le $stopGate -or
+    $profileRestore -le $snapshotGate -or $selfElevation -le $transactionStart -or
+    $stopGate -le $selfElevation) {
+    throw 'Elevation must precede the stop gate, snapshot and profile restore writes.'
+}
+
+# Snapshot contents are read-only inventory and must never include the
+# WireGuard profile or private material. Verify both the privacy manifest and
+# the exact project-contained destination before attempting host writes.
+$snapshotStart = $source.IndexOf('function New-WslNetworkSnapshot', [StringComparison]::Ordinal)
+$snapshotEnd = $source.IndexOf("`nfunction ", $snapshotStart + 1, [StringComparison]::Ordinal)
+if ($snapshotStart -lt 0 -or $snapshotEnd -le $snapshotStart) {
+    throw 'New-WslNetworkSnapshot was not found.'
+}
+$snapshotSource = $source.Substring($snapshotStart, $snapshotEnd - $snapshotStart)
+foreach ($expected in @(
+    'ClashOfRust-network-backups',
+    "'state.json'",
+    "'guardian-audit.json'",
+    "'scope-renewal.json'",
+    "'wslconfig.before'",
+    'Get-NetFirewallHyperVVMSetting',
+    'Get-NetFirewallHyperVRule',
+    "Name -eq 'ClashOfRust.WslEgress'",
+    "TaskName 'ClashOfRust-WslEgress-Renew'",
+    "'wireguard-profile-excluded'",
+    'Get-SnapshotSha256 $record.destination'
+)) {
+    if (-not $snapshotSource.Contains($expected)) {
+        throw "Missing network snapshot contract: $expected"
+    }
+}
+if ($snapshotSource -match 'profile\.json|private_key|Queries\s*=') {
+    throw 'Network snapshots must exclude private profile content and firewall queries.'
+}
+
 $start = $source.IndexOf('function Set-ProtectedDirectoryAcl', [StringComparison]::Ordinal)
 if ($start -lt 0) { throw 'Set-ProtectedDirectoryAcl was not found.' }
 $end = $source.IndexOf("`nfunction ", $start + 1, [StringComparison]::Ordinal)
@@ -151,8 +222,10 @@ $PackageStage = 'F:\Package Stage'
 $ManifestDirectory = 'F:\Manifest Directory'
 $Repository = 'F:\Repository With Spaces'
 $JobDirectory = 'F:\Job Directory'
+$VerifiedBuild = 'F:\Repository With Spaces\dist\build'
 $InstallationRoot = 'C:\Program Files\Clash of Rust WSL'
 $ProfilePath = 'C:\Users\Test User\AppData\Local\ClashOfRust\WslEgress\profile.json'
+$SnapshotRoot = 'F:\Repository With Spaces\ClashOfRust-network-backups'
 $TestDistro = 'Ubuntu-26.04'
 $DonePath = 'F:\Job Directory\DONE.txt'
 $FailedPath = 'F:\Job Directory\FAILED.txt'
@@ -214,10 +287,14 @@ $expectedVector = @(
     'F:\Repository With Spaces',
     '-JobDirectory',
     'F:\Job Directory',
+    '-VerifiedBuild',
+    'F:\Repository With Spaces\dist\build',
     '-InstallationRoot',
     'C:\Program Files\Clash of Rust WSL',
     '-ProfilePath',
     'C:\Users\Test User\AppData\Local\ClashOfRust\WslEgress\profile.json',
+    '-SnapshotRoot',
+    'F:\Repository With Spaces\ClashOfRust-network-backups',
     '-TestDistro',
     'Ubuntu-26.04',
     '-NoSelfElevation'
@@ -241,7 +318,7 @@ if (-not [string]::IsNullOrEmpty([string]$result.Failure) -and
 [pscustomobject]@{
     suite = 'admin-job-acl-offline'
     result = 'PASS'
-    assertions = 25
+    assertions = 44
     hostWrites = $false
     elevationConsent = 'NOT_RUN'
     elevationVector = 'PASS'
