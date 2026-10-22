@@ -12,8 +12,31 @@
 | Container forwarding | Existing native Linux bridges with private IPv4 subnets |
 
 The broker requires a positive generation and refuses unknown or changed WSL
-configuration instead of adopting it. WSL installation and distro creation are
-operator steps; the project does not download or import a rootfs.
+configuration instead of adopting it. The profile selects an existing ordinary
+WSL distribution. The project does not download or import a rootfs.
+
+## Current machine
+
+| Item | Evidence |
+| --- | --- |
+| Ubuntu 26.04 | Installed under `F:\WSL`, WSL2, systemd enabled |
+| Network mode | NAT |
+| Plain-shell network | NAT `eth0` and gateway only |
+| DNS and HTTPS | Blocked by the configured fail-closed state |
+| Windows host networking | Unchanged; no Windows-wide VPN |
+| Strict launcher | Plain shell exposes `/mnt/*`; the launcher is designed to hide it |
+
+Ubuntu 26.04's compatibility with the secure launcher and current toolchain is
+not established as an end-to-end pass. The native Claude Desktop package,
+Chrome, Codex CLI and Claude Code CLI are not currently verified as installed.
+If a native package requires a newer GLIBC, choose a compatible distribution or
+package; do not modify system glibc.
+
+`scripts/wsl-secure-egress/tools/install-wsl-tools.sh` is the only workspace
+tool installer. It must run as root inside the strict launcher after the gate
+observes the configured VPS IPv4. The old
+`scripts/wsl-secure-egress/install-workspace-tools.sh` path forwards arguments
+and exit status to that implementation; it is not a separate installer.
 
 ## Not supported
 
@@ -41,8 +64,8 @@ is not required because the helper's seccomp filter blocks nested namespace
 creation and switching.
 
 Unsupported kernel, WSL version or policy fields produce `BLOCKED`. A timeout
-or missing output is never treated as a successful close. Windows Doctor and
-Status enumerate registry names only and do not start stopped distributions.
+or missing output is never treated as a successful close. Windows Status and
+preflight enumerate registry names only and do not start stopped distributions.
 
 ## Update policy
 

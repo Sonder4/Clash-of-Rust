@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Offline regression for the administrator job's ACL construction.
+# Offline regression for the administrator job's ACL and elevation construction.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -47,9 +47,179 @@ $parseScript = {
 }
 & $parseScript $functionSource
 
+$elevateStart = $source.IndexOf('function Start-SelfElevated', [StringComparison]::Ordinal)
+if ($elevateStart -lt 0) { throw 'Start-SelfElevated was not found.' }
+$elevateEnd = $source.IndexOf("`nfunction ", $elevateStart + 1, [StringComparison]::Ordinal)
+if ($elevateEnd -lt 0) { throw 'The end of Start-SelfElevated was not found.' }
+$elevateSource = $source.Substring($elevateStart, $elevateEnd - $elevateStart)
+if ($elevateSource -match 'ConvertTo-WindowsCommandLineArgument') {
+    throw 'The elevation path must not prequote its native argument vector.'
+}
+if ($elevateSource -match 'Start-Process\s+-FilePath\s+''C:\\Windows\\System32\\sudo\.exe''') {
+    throw 'The elevation path must not pass its argument vector through Start-Process.'
+}
+if ($elevateSource -notmatch "&\s*'C:\\Windows\\System32\\sudo\.exe'\s+@sudoArguments") {
+    throw 'The elevation path must invoke sudo.exe with one native argument per array element.'
+}
+
+# Runtime acceptance must execute the same strict namespace helper and fixed
+# provider probes used by the production backend. A plain root shell would
+# expose the WSL root network namespace and is not valid acceptance evidence.
+$isolatedStart = $source.IndexOf('function Invoke-IsolatedWsl', [StringComparison]::Ordinal)
+$runtimeStart = $source.IndexOf('function Assert-IsolatedRuntime', [StringComparison]::Ordinal)
+if ($isolatedStart -lt 0 -or $runtimeStart -lt 0 -or $runtimeStart -le $isolatedStart) {
+    throw 'Strict isolated WSL acceptance functions were not found.'
+}
+$runtimeSource = $source.Substring(
+    $runtimeStart, $source.IndexOf("`ntry {", $runtimeStart, [StringComparison]::Ordinal) - $runtimeStart)
+foreach ($expected in @(
+    "'--exec', `$helper",
+    "'run', '--generation'",
+    "'public_ipv4'",
+    "'virtual_interfaces'",
+    "'tunnel_default_route'",
+    "'host_mount_hidden'",
+    "'interop_guarded'",
+    "'provider_openai'",
+    "'provider_anthropic'",
+    "'provider_deepseek'"
+)) {
+    $haystack = $runtimeSource + $source.Substring($isolatedStart, $runtimeStart - $isolatedStart)
+    if (-not $haystack.Contains($expected)) {
+        throw "Missing strict runtime acceptance token: $expected"
+    }
+}
+if ($source -notmatch 'Invoke-IsolatedWsl\s+-Generation\s+\$generation' -or
+    $source -match 'curl -4 -fsS --connect-timeout 15 https://ifconfig\.co/ip') {
+    throw 'Runtime acceptance must not regress to the plain WSL root shell.'
+}
+if ($source -notmatch 'Assert-IsolatedRuntime\s+\$response\s+\$state') {
+    throw 'Start acceptance must invoke the strict isolated runtime probe.'
+}
+if ($source -notmatch 'Invoke-Wsl ''/usr/sbin/nft list tables''') {
+    throw 'The nftables guard audit must run only as a host-level invariant check.'
+}
+
+# Execute the actual elevation function in an isolated runspace. The external
+# sudo program is replaced by a PowerShell function, so this verifies the
+# native argument vector without opening consent.exe or changing the host.
+$vectorSource = $elevateSource.Replace(
+    "& 'C:\Windows\System32\sudo.exe' @sudoArguments",
+    'Capture-Sudo @sudoArguments')
+if ($vectorSource -eq $elevateSource) {
+    throw 'The sudo invocation could not be isolated for the argument test.'
+}
+$vectorSource = $vectorSource.Replace('$PSCommandPath', '$COR_TEST_JOB_PATH')
+$vectorSource = $vectorSource.Replace(
+    'exit ', '$script:CapturedExitCode = [int]')
+$vectorSource += @'
+function Capture-Sudo {
+    param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Vector)
+    $script:CapturedSudoArguments = @($Vector)
+    $global:LASTEXITCODE = 0
+}
+'@
+$runnerSource = @'
+param([string]$FunctionSource)
+Set-StrictMode -Version Latest
+$COR_TEST_JOB_PATH = 'C:\Program Files\COR Job\COR-Full-AdminJob.ps1'
+$NoSelfElevation = $false
+$PackageStage = 'F:\Package Stage'
+$ManifestDirectory = 'F:\Manifest Directory'
+$Repository = 'F:\Repository With Spaces'
+$JobDirectory = 'F:\Job Directory'
+$InstallationRoot = 'C:\Program Files\Clash of Rust WSL'
+$ProfilePath = 'C:\Users\Test User\AppData\Local\ClashOfRust\WslEgress\profile.json'
+$TestDistro = 'Ubuntu-26.04'
+$DonePath = 'F:\Job Directory\DONE.txt'
+$FailedPath = 'F:\Job Directory\FAILED.txt'
+function Set-Content {
+    param([string]$LiteralPath, $Value)
+    $script:CapturedFailure = [string]$Value
+}
+function Test-Path {
+    param([string]$LiteralPath, $PathType)
+    return $LiteralPath -eq $DonePath
+}
+. ([ScriptBlock]::Create($FunctionSource))
+try { Start-SelfElevated } catch {
+    Write-Output ('RUNNER_ERROR=' + $_.Exception.Message)
+    exit 90
+}
+if ($null -eq $script:CapturedSudoArguments) {
+    Write-Output 'RUNNER_ERROR=sudo vector was not captured'
+    exit 91
+}
+[pscustomobject]@{
+    Arguments = @($script:CapturedSudoArguments)
+    Failure = $script:CapturedFailure
+} | ConvertTo-Json -Compress -Depth 5
+'@
+$runnerPath = Join-Path ([IO.Path]::GetTempPath()) (
+    'cor-admin-vector-' + [guid]::NewGuid().ToString('N') + '.ps1')
+try {
+    [IO.File]::WriteAllText(
+        $runnerPath,
+        $runnerSource,
+        [Text.UTF8Encoding]::new($false))
+    $powershell = (Get-Process -Id $PID).Path
+    $raw = & $powershell -NoProfile -ExecutionPolicy Bypass -File $runnerPath `
+        -FunctionSource $vectorSource 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw ('Isolated elevation runner failed: ' + (($raw | Out-String).Trim()))
+    }
+    $result = (($raw | Out-String).Trim() | ConvertFrom-Json)
+} finally {
+    if (Test-Path -LiteralPath $runnerPath) {
+        Remove-Item -LiteralPath $runnerPath -Force
+    }
+}
+
+$expectedVector = @(
+    '--new-window',
+    'powershell.exe',
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    'C:\Program Files\COR Job\COR-Full-AdminJob.ps1',
+    '-PackageStage',
+    'F:\Package Stage',
+    '-ManifestDirectory',
+    'F:\Manifest Directory',
+    '-Repository',
+    'F:\Repository With Spaces',
+    '-JobDirectory',
+    'F:\Job Directory',
+    '-InstallationRoot',
+    'C:\Program Files\Clash of Rust WSL',
+    '-ProfilePath',
+    'C:\Users\Test User\AppData\Local\ClashOfRust\WslEgress\profile.json',
+    '-TestDistro',
+    'Ubuntu-26.04',
+    '-NoSelfElevation'
+)
+$actualVector = @($result.Arguments)
+if ($actualVector.Count -ne $expectedVector.Count) {
+    throw ('Elevation vector count mismatch: expected {0}, got {1}.' -f
+        $expectedVector.Count, $actualVector.Count)
+}
+for ($index = 0; $index -lt $expectedVector.Count; $index++) {
+    if ([string]$actualVector[$index] -cne $expectedVector[$index]) {
+        throw ('Elevation vector mismatch at index {0}: expected [{1}], got [{2}].' -f
+            $index, $expectedVector[$index], $actualVector[$index])
+    }
+}
+if (-not [string]::IsNullOrEmpty([string]$result.Failure) -and
+    [string]$result.Failure -ne 'elevated child exited without a completion journal') {
+    throw ('Unexpected elevated-child failure journal: ' + [string]$result.Failure)
+}
+
 [pscustomobject]@{
     suite = 'admin-job-acl-offline'
     result = 'PASS'
-    assertions = 9
+    assertions = 25
     hostWrites = $false
+    elevationConsent = 'NOT_RUN'
+    elevationVector = 'PASS'
 } | ConvertTo-Json -Compress

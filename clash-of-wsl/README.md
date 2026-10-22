@@ -19,7 +19,18 @@ desktop client is required for it to run.
                                  v
                             Germany VPS
 
-## What it guarantees
+## Status
+
+The current host has the component installed but disconnected. The Windows
+profile is missing, the broker reports `failed_closed_requested`, the matching
+Hyper-V endpoint rule is disabled and WSL DNS/HTTPS fail. The resident guardian
+service is running, which does not prove that the tunnel is online.
+
+Chrome, Codex CLI, Claude Code CLI and Claude Desktop are not verified as
+installed or working in the current Ubuntu 26.04 environment. Live VPS source,
+vendor reachability, cold boot and recovery acceptance remain `NOT_RUN`.
+
+## Intended guarantees
 
 Every WSL workload leaves through the Germany VPS. DNS and IPv6 are handled
 inside the tunnel, so neither can bypass it. If the tunnel drops, the host policy
@@ -61,7 +72,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File clash-of-wsl/Install-ClashOfWsl.ps1 -Execute
 ```
 
-Then open the tunnel:
+The executed `Install` and `Start` actions require a protected profile. The
+endpoint host and port fields do not contain WireGuard keys. Then open the
+tunnel:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
@@ -76,13 +89,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File clash-of-wsl/ClashOfWsl.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File clash-of-wsl/ClashOfWsl.ps1 -Action Test
 ```
 
-Install the resident guard inside the managed distribution:
+The execution path registers and starts the owned SYSTEM guardian. To install
+the separate in-distribution guard:
 
 ```
 wsl.exe -d Ubuntu-22.04 -u root --exec clash-of-wsl/linux/install-guard.sh
 ```
 
-Remove everything and restore the prior network configuration:
+Remove everything and restore the prior network configuration. Removal is
+blocked unless the restore succeeds; the service and payload remain available
+for recovery:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
@@ -108,12 +124,16 @@ result can never be mistaken for a change that happened.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File clash-of-wsl/Test-ClashOfWsl.ps1
 ```
 
-18 assertions cover file presence, PowerShell parsing, the action set, the
-fail-closed guards and the UAC path. Live tunnel, VPS egress and uninstall are
-reported as `NOT_RUN`, because they need an elevated host.
+The latest completed run passed 34 assertions covering file presence,
+PowerShell parsing, the action set, the UAC path, the independent command-line
+copy, and isolated execution of both the install and failed-restore uninstall
+branches. The install branch verifies one guardian service creation and start
+after payload copies. The uninstall branch verifies that a blocked restore
+leaves the service and payload intact. Live tunnel, VPS egress and real
+uninstall remain `NOT_RUN`, because they need an elevated host.
 
 ## What this component does not do
 
-It does not touch the CC Switch data directory, it does not handle Windows system
-proxy or TUN for Windows applications, and it does not start a second desktop
-client. Those remain Clash of Rust core.
+It does not handle Windows system proxy or TUN for Windows applications and it
+does not start a second desktop client. Those remain Clash of Rust core. It
+never accesses the CC Switch data directory.

@@ -3,10 +3,35 @@
 This file records executed results and their limits. Update it only from an
 actual run; never convert an unavailable or timed-out check into PASS.
 
-The latest PR repair results are in the final section. Earlier dated runs are
-historical evidence for their own revision. The installed Clash of Rust 0.6.0
-is still running, this source revision has not replaced it, and the production
-WSL journal is `installed_closed` with its endpoint disabled.
+Earlier dated runs are historical evidence for their own revision and payload.
+They do not describe the current host state.
+
+## Current snapshot, 2026-10-22
+
+| Item | Current read-only evidence |
+| --- | --- |
+| Upstream | `2615ebc96f9f510802194727a6108bde73f4c8ed` |
+| Last CI-verified head | `87ef6b206c49446bd9ed614923a6381a346d16a8` |
+| Branch relation | `0` behind, `73` ahead at the verified head |
+| Current worktree | Contains later uncommitted review, recovery, installer and documentation work |
+| Installed desktop | Clash of Rust 0.6.0 under `C:\Program Files\Clash of Rust` |
+| Source version | Upstream 0.6.1 synchronized; not installed over the 0.6.0 desktop |
+| `.wslconfig` | NAT, `localhostForwarding=false`, `dnsTunneling=false`, `autoProxy=false`, `firewall=true` |
+| Hyper-V WSL policy | Default inbound and outbound Block |
+| Endpoint exception | `ClashOfRust-WslEgress-Endpoint`, `Enabled=False` |
+| Windows profile | **MISSING** |
+| Broker state | `failed_closed_requested` |
+| Guardian service | Running / Automatic; this is not tunnel evidence |
+| Ubuntu 26.04 | Installed under `F:\WSL`, WSL2, currently stopped |
+| Ubuntu current network | Plain NAT `eth0`; DNS and `curl` fail |
+| Chrome / Codex CLI / Claude Code CLI / Claude Desktop | `NOT_RUN` on the current host |
+| Current VPS source and provider connections | `NOT_RUN` |
+| Strict-launcher visibility and interop checks | Plain-shell evidence only; strict live check `NOT_RUN` |
+| UAC transaction | `NOT_RUN` for the current repair |
+| Stop/Start, cold boot, reboot, network switch | `NOT_RUN` |
+
+The current fail-closed state takes precedence over the historical
+2026-10-18 tunnel results below.
 
 ## Local offline checks
 
@@ -449,6 +474,10 @@ with the exact commit, run URL and per-scenario result.
 
 ## 2026-10-18 current installed-payload retest
 
+> Historical section. The successful rows below describe the payload and host
+> state on 2026-10-18. They do not override the current missing profile,
+> disabled endpoint or blocked WSL DNS.
+
 This section records the resumed local retest after the protected helper
 payloads were synchronized to both Program Files package locations. It
 supersedes earlier entries that described the endpoint as disabled before the
@@ -456,7 +485,7 @@ UAC-approved recovery.
 
 | Check | Result | Actual evidence |
 | --- | --- | --- |
-| Upstream synchronization | PASS | `upstream/main=37683750b37be9d2bbcfb22804bec96174e14af5`; fork HEAD is 39 commits ahead and 0 behind |
+| Upstream synchronization at that time | PASS | `upstream/main=37683750b37be9d2bbcfb22804bec96174e14af5`; that historical fork HEAD was 39 commits ahead and 0 behind |
 | Stop transaction | PASS | Linux manager returned `succeeded`, phase `Guarded`; owned namespaces and policy routes were removed |
 | First Start after Stop | PASS | Linux manager returned `succeeded`, phase `Running`; both `cor-egress-transport` and `cor-egress-gw` were recreated |
 | Isolated IPv4 exit | PASS | `api.ipify.org` and `ifconfig.me/ip` both returned `62.84.164.122` |
@@ -572,6 +601,38 @@ runtime remain `NOT_RUN`, `BLOCKED` or `FAIL` as recorded above.
 These are local worktree results. A new-head GitHub CI result is still pending;
 old-head CI evidence above must not be used to declare this repair's CI passed.
 
+## 2026-10-22 final offline verification before fork push
+
+The following suites were executed again from the review branch after the
+last documentation and CI changes. No UAC prompt was raised, no WSL distro was
+started by these tests, and no Windows firewall, route, DNS or service setting
+was changed by these tests.
+
+| Check | Result |
+| --- | --- |
+| Windows broker unit | PASS, 166 assertions |
+| Windows workflow | PASS, 244 assertions |
+| Windows elevation | PASS, 21 assertions; consent `NOT_RUN` |
+| Administrator argument vector and ACL | PASS, 25 assertions; consent `NOT_RUN` |
+| Profile restore | PASS, 18 assertions |
+| Package staging | PASS, 70 assertions |
+| Package upgrade | PASS, 53 assertions |
+| Clash of WSL | PASS, 34 assertions; live tests `NOT_RUN` |
+| Linux static and boot guard | PASS, 87 tests, 2 skipped |
+| Acceptance harness | PASS, 3 tests |
+| VPS server | PASS, 24 tests |
+| VPS provisioning | PASS, 27 tests |
+| Tool installer static regression | PASS, 8 tests |
+| Rust desktop binary, serial | PASS, 106/106 |
+| Rust formatting and compile check | PASS |
+| WSL workflow YAML parse | PASS |
+| Git whitespace check | PASS |
+
+The hosted CI run for this new commit was still pending when this entry was
+written. Every live deployment, tunnel, provider, Claude, interop, cold-boot,
+network-switch, rollback, uninstall and reinstall item remains `NOT_RUN` until
+authoritative evidence is collected.
+
 ## 2026-10-18 follow-up repair and recovery attempt (current session)
 
 This entry records only commands actually executed in the resumed session.
@@ -604,6 +665,10 @@ The Claude user service remains disabled as a fail-safe; its original unit
 backup is preserved in the root-only WSL backup directory above.
 
 ## 2026-10-22 current fork review repair
+
+> Historical subsection for the development tree immediately after the
+> `87ef6b2` repair series. Later entries supersede its test counts and
+> current-state conclusions.
 
 This section records only commands executed on 2026-10-22. It does not change
 the production host state described above.
@@ -672,7 +737,7 @@ the upstream 0.6.1 UI-motion and Claude protection-mode changes.
 
 | Check | Result | Evidence and limits |
 | --- | --- | --- |
-| Upstream ancestry | PASS | `git merge-base --is-ancestor upstream/main HEAD`; `0 behind / 72 ahead` before this documentation commit |
+| Upstream ancestry | PASS | `git merge-base --is-ancestor upstream/main HEAD`; that intermediate snapshot was `0 behind / 72 ahead`. The later CI-verified `87ef6b2` snapshot is `0 / 73` |
 | Admin ACL SID regression | PASS, 9 assertions | `tests/admin-job-acl.ps1`; canonical `*SID` rules pass and the host is unchanged |
 | Desktop test binary after merge | PASS, 105 tests | `cargo test -p clash-of-rust --bin clash-of-rust --locked`; includes upstream motion and WSL UI dispatch tests |
 | Workspace all-targets check | PASS | `cargo check --workspace --all-targets --locked` |
@@ -699,3 +764,67 @@ A root-only copy is present at
 journal. It has not yet been copied to Windows because that write requires
 protected ACL setup and UAC. No tunnel, provider request or model-client live
 test occurred in this section.
+
+## 2026-10-22 final documentation and review-test pass
+
+This section supersedes old-head and intermediate worktree counts. It records
+the development tree during documentation synchronization; it is still not a
+new-head GitHub CI result.
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| Windows unit | PASS, 166 assertions | Mocked host, WSL and network boundaries |
+| Windows workflow | PASS, 244 assertions | No firewall, WSL or task mutation |
+| Windows elevation | PASS, 21 assertions | UAC remains `NOT_RUN` |
+| Admin job construction | PASS, 25 assertions | ACL construction and an isolated execution of the native sudo argument vector; UAC remains `NOT_RUN` |
+| Profile restore | PASS, 18 assertions | Read-only or temporary fixture; does not restore the live profile |
+| Package staging | PASS, 70 assertions | Temporary fixture; preview did not write production package files |
+| Package upgrade | PASS, 53 assertions | Installed package and services unchanged |
+| Clash of WSL component | PASS, 34 assertions | Static/parser checks plus isolated execute-path tests for uninstall retention and guardian registration; live host checks remain `NOT_RUN` |
+| Linux static and boot guard | PASS, 87 tests, 2 skipped | Portable fixtures; no real host mutation |
+| VPS server validation | PASS, 24 tests | Offline schema and profile validation |
+| VPS provisioning | PASS, 27 tests | Mocked SSH and host boundaries |
+| Acceptance harness | PASS, 3 tests | Offline endpoint validation |
+| Tool installer static regression | PASS, 8 tests | Single authoritative installer, absolute compatibility wrapper and fail-closed exit-code forwarding |
+| Rust desktop binary, serial | PASS, 106/106 | Shared renderer tests were serialized |
+| Rust formatting | PASS | `cargo fmt --all -- --check` |
+| Git whitespace | PASS | `git diff --check` before final documentation edits |
+
+An earlier parallel desktop run passed 105/106 tests. The motion test
+`motion_overlays_reverse_on_reopen_release_content_and_leave_no_idle_clock`
+lost a shared headless renderer race. The test passed alone and the complete
+serial run passed 106/106. This failure remains part of the record.
+
+The current review repairs include:
+
+- profile-required validation for executed Install and Start;
+- partial Windows recovery without an absent Linux helper;
+- reinstalling after a verified restore;
+- shared boot guards for every managed distribution;
+- tolerance for an inactive systemd unit before its first start;
+- `prepared_for_reinstall` propagation through the broker, Rust report and UI;
+- explicit **恢复原网络** confirmation;
+- retained payload and service when uninstall restore fails;
+- guardian service registration and startup by the Execute path;
+- durable payload-upgrade failure stages;
+- refusal to roll back a missing journal-owned override;
+- native sudo arguments that preserve spaces in installation paths.
+
+The review-test gaps identified earlier are now covered by offline execution:
+the native sudo vector preserves paths containing spaces; installer uninstall
+retains the payload and service after a failed restore; the execute path
+registers and starts the guardian; and the compatibility installer delegates to
+the single authoritative implementation while preserving the exit-20
+fail-closed gate. These tests do not perform UAC or mutate the live host.
+
+The current host state is unchanged by these offline checks:
+
+| Live item | Result |
+| --- | --- |
+| Windows profile | `MISSING` |
+| Hyper-V endpoint | `Enabled=False` |
+| Broker | `failed_closed_requested` |
+| Guardian service | Running / Automatic |
+| Ubuntu DNS and HTTPS | Blocked; fail-closed |
+| VPS IPv4, provider reachability and Claude | `NOT_RUN` |
+| UAC, stop/start, cold boot, network switch, rollback and reinstall | `NOT_RUN` |

@@ -153,6 +153,34 @@ fn wsl_actual_deployment_is_separate_from_installation_draft_and_global_core() {
 }
 
 #[test]
+fn wsl_prepared_for_reinstall_keeps_protected_deployment_and_recovery_controls() {
+    use clash_client_core::wsl::Action as W;
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Wsl);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let ticket = app
+        .wsl
+        .evidence
+        .begin(app.wsl.draft.request(W::Status, false))
+        .unwrap();
+    let mut report = wsl_report(W::Status, 10);
+    report.phase = "prepared_for_reinstall".into();
+    report.outcome = clash_client_core::wsl::Outcome::Succeeded;
+    let _ = app.update(Message::Wsl(wsl::Event::Finished(
+        ticket,
+        Box::new(Ok(report)),
+        String::new(),
+    )));
+    app.present(&data, &mut models);
+    assert!(data.get_wsl_installed());
+    assert_eq!(data.get_wsl_phase(), "prepared_for_reinstall");
+    assert!(data.get_wsl_deployment().contains("generation 10"));
+}
+
+#[test]
 fn wsl_restore_requires_a_separate_confirmation_and_cancel_keeps_policy_untouched() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Wsl);
@@ -226,8 +254,10 @@ fn wsl_native_buttons_dispatch_preview_and_busy_state_keeps_navigation_available
     // The compact WSL page has platform-dependent card and text metrics. Keep
     // this probe bounded to the first action card while allowing the action
     // row to move when the renderer uses different font ascent/line spacing.
-    for y in (280..680).step_by(8) {
-        for x in [80, 180, 280, 380] {
+    // The operation card follows the status card. Probe only that card's
+    // control row to avoid invoking every other native control in the page.
+    for y in (320..620).step_by(8) {
+        for x in (280..840).step_by(48) {
             events.borrow_mut().clear();
             ui_testing::click(window.window(), x as f32, y as f32);
             if events.borrow().iter().any(|(intent, action, mode)| {

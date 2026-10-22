@@ -1,4 +1,5 @@
 import { ScrollView } from "std-widgets.slint";
+import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
 import { Label, Caption, Heading, Paragraph, ContentPanel, ActionButton, Field, Badge, Divider } from "../components/controls.slint";
@@ -34,7 +35,7 @@ component StatusRow inherits Rectangle {
     }
 }
 
-export component WslPage inherits Rectangle {
+export component WslPage inherits PageSurface {
     property <bool> logs-open: false;
     ScrollView {
         x: 0px;
@@ -63,10 +64,8 @@ export component WslPage inherits Rectangle {
                     Label { text: UiData.wsl-phase; horizontal-alignment: right; }
                 }
                 Divider { }
-                StatusRow { title: "隧道"; value: UiData.wsl-tunnel; highlight: UiData.wsl-tunnel == "connected"; }
                 StatusRow { title: "保护"; value: UiData.wsl-protection; }
                 StatusRow { title: "验收"; value: UiData.wsl-functional; }
-                StatusRow { title: "后端"; value: UiData.wsl-deployed-backend; }
                 if UiData.wsl-message != "": Paragraph { text: UiData.wsl-message; color: Theme.secondary; }
                 if UiData.wsl-guidance != "": Paragraph { text: UiData.wsl-guidance; color: Theme.warning; }
             }
@@ -74,11 +73,9 @@ export component WslPage inherits Rectangle {
                 Heading { text: "操作"; }
                 HorizontalLayout {
                     spacing: Theme.content-gap;
-                    WslActionButton { text: "连接"; action: "Start"; primary: true; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
-                    WslActionButton { text: "断开"; action: "Stop"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
-                }
-                HorizontalLayout {
-                    spacing: Theme.content-gap;
+                    if !UiData.wsl-installed: WslActionButton { text: "安装"; action: "Install"; primary: true; }
+                    if UiData.wsl-installed: WslActionButton { text: "连接"; action: "Start"; primary: true; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
+                    if UiData.wsl-installed: WslActionButton { text: "断开"; action: "Stop"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
                     WslActionButton { text: "状态"; action: "Status"; mode: "preview"; }
                     WslActionButton { text: "测试"; action: "Test"; mode: "preview"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
                     WslActionButton { text: "预检"; action: "Install"; mode: "preview"; }
@@ -86,13 +83,12 @@ export component WslPage inherits Rectangle {
                 }
                 HorizontalLayout {
                     spacing: Theme.content-gap;
-                    if !UiData.wsl-installed: WslActionButton { text: "安装"; action: "Install"; primary: true; }
                     if UiData.wsl-installed: WslActionButton { text: "断开并保留保护"; action: "Rollback"; mode: "execute"; }
                     if UiData.wsl-installed: WslActionButton { text: "恢复原网络"; action: "Rollback"; mode: "restore-confirm"; danger: true; }
                 }
                 if UiData.wsl-admin-command != "": Paragraph { text: UiData.wsl-admin-command; font-size: Theme.detail-size; color: Theme.secondary; }
             }
-            ContentPanel {
+            if !UiData.wsl-installed: ContentPanel {
                 Heading { text: "安装"; }
                 HorizontalLayout {
                     cross-axis-alignment: center;

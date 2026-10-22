@@ -82,46 +82,20 @@ function Start-SelfElevated {
         '-TestDistro', $TestDistro,
         '-NoSelfElevation'
     )
-    function ConvertTo-WindowsCommandLineArgument([string]$Value) {
-        if ($null -eq $Value) { $Value = '' }
-        if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
-        $builder = New-Object Text.StringBuilder
-        [void]$builder.Append('"')
-        $slashes = 0
-        foreach ($character in $Value.ToCharArray()) {
-            if ($character -eq '\') {
-                $slashes++
-                continue
-            }
-            if ($character -eq '"') {
-                if ($slashes -gt 0) { [void]$builder.Append(('\' * ($slashes * 2))) }
-                [void]$builder.Append('\')
-                [void]$builder.Append('"')
-                $slashes = 0
-                continue
-            }
-            if ($slashes -gt 0) { [void]$builder.Append(('\' * $slashes)); $slashes = 0 }
-            [void]$builder.Append($character)
-        }
-        if ($slashes -gt 0) { [void]$builder.Append(('\' * ($slashes * 2))) }
-        [void]$builder.Append('"')
-        $builder.ToString()
-    }
     try {
         # Start-Process -Verb RunAs can return a medium-integrity child on this
         # host, so elevation is delegated to Windows sudo, which enforces its
         # own consent contract. This host forces new-window mode. Sudo does not
         # expose the elevated child's exit code, so success is proved only by
         # the DONE/FAILED journal written by the child.
-        # Start-Process treats an ArgumentList array differently across
-        # Windows PowerShell and PowerShell 7. Build one Windows command line
-        # with CommandLineToArgvW-compatible quoting so paths containing
-        # spaces remain a single argument in the elevated child.
-        $sudoCommandLine = (@('--new-window', 'powershell.exe') + $args |
-            ForEach-Object { ConvertTo-WindowsCommandLineArgument ([string]$_) }) -join ' '
-        $waiting = Start-Process -FilePath 'C:\Windows\System32\sudo.exe' `
-            -ArgumentList $sudoCommandLine `
-            -PassThru -Wait -ErrorAction Stop
+        # Invoke the executable directly with a native argument vector. Passing
+        # a prequoted string through Start-Process adds another quoting layer and
+        # can split paths such as C:\Program Files\Clash of Rust WSL. The direct
+        # invocation is also captured by the offline command-vector regression.
+        $sudoArguments = @('--new-window', 'powershell.exe') + $args
+        $sudoOutput = @(& 'C:\Windows\System32\sudo.exe' @sudoArguments 2>&1)
+        $sudoExitCode = [int]$LASTEXITCODE
+        $waiting = [pscustomobject]@{ ExitCode = $sudoExitCode; Output = $sudoOutput }
         if ([int]$waiting.ExitCode -ne 0) {
             Set-Content -LiteralPath $FailedPath -Value (
                 'elevation request failed with exit code ' + [int]$waiting.ExitCode)
@@ -190,6 +164,138 @@ function Invoke-Wsl {
     [pscustomobject]@{ Output = @($out); ExitCode = $code }
 }
 
+function Invoke-IsolatedWsl {
+    param(
+        [Parameter(Mandatory)][long]$Generation,
+        [Parameter(Mandatory)][string[]]$Command,
+        [string]$InputText
+    )
+    $helper = '/usr/local/lib/cor-egress/manager'
+    $arguments = @(
+        '--distribution', $TestDistro,
+        '--user', 'root',
+        '--exec', $helper,
+        'run', '--generation', [string]$Generation,
+        '--'
+    ) + $Command
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = (Join-Path $env:SystemRoot 'System32\wsl.exe')
+    $quoted = foreach ($argument in $arguments) {
+        if ($argument.Length -gt 0 -and $argument -notmatch '[\s"]') {
+            $argument
+        } else {
+            '"' + $argument.Replace('\', '\\').Replace('"', '\"') + '"'
+        }
+    }
+    $start.Arguments = $quoted -join ' '
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        if ($InputText) {
+            $bytes = [Text.UTF8Encoding]::new($false).GetBytes($InputText)
+            $process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+        }
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(90000)) {
+            $process.Kill()
+            throw 'The strict isolated WSL command timed out.'
+        }
+        $null = $stderr.GetAwaiter().GetResult()
+        [pscustomobject]@{
+            Output = @(($stdout.GetAwaiter().GetResult() -split '\r?\n') |
+                Where-Object { $_ })
+            ExitCode = [int]$process.ExitCode
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Assert-IsolatedRuntime($StartResponse, $State) {
+    $generation = [long]$State.generation
+    $probe = @'
+import ipaddress,json,os,pathlib,subprocess,sys,urllib.request
+request=json.load(sys.stdin)
+checks={}
+def open_https(host):
+    request_obj=urllib.request.Request('https://'+host+'/',headers={'User-Agent':'ClashOfWSL-Acceptance/1'})
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request_obj,timeout=15) as response:
+        return 100 <= response.status < 500
+try:
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open('https://api.ipify.org?format=json',timeout=15) as response:
+        checks['public_ipv4']=json.loads(response.read(65537))['ip']==request['vps_ipv4']
+except Exception:
+    checks['public_ipv4']=False
+try:
+    interfaces=json.loads(subprocess.check_output(['/usr/sbin/ip','-j','address','show'],timeout=5))
+    checks['virtual_interfaces']={item['ifname'] for item in interfaces}=={'lo','wg0','cor-bg0'}
+except Exception:
+    checks['virtual_interfaces']=False
+try:
+    result=subprocess.run(['/usr/sbin/ip','-j','route','show','default'],capture_output=True,text=True,timeout=5)
+    routes=json.loads(result.stdout or '[]')
+    checks['tunnel_default_route']=result.returncode==0 and len(routes)==1 and routes[0].get('dev')=='wg0'
+except Exception:
+    checks['tunnel_default_route']=False
+checks['host_mount_hidden']=not pathlib.Path('/mnt/c').exists() and not pathlib.Path('/init').exists()
+checks['interop_guarded']=not pathlib.Path('/mnt/c/Windows/System32/ipconfig.exe').exists()
+checks['proxy_environment_clear']=not any(name.lower().endswith('proxy') for name in os.environ)
+for name,host in request['providers'].items():
+    try: checks['provider_'+name]=open_https(host)
+    except Exception: checks['provider_'+name]=False
+print(json.dumps({'schema':1,'generation':request['generation'],'checks':checks}))
+'@
+    $request = [ordered]@{
+        generation = $generation
+        vps_ipv4 = '62.84.164.122'
+        providers = [ordered]@{
+            openai = 'api.openai.com'
+            anthropic = 'api.anthropic.com'
+            deepseek = 'api.deepseek.com'
+        }
+    } | ConvertTo-Json -Compress
+    $probeResult = Invoke-IsolatedWsl -Generation $generation `
+        -Command @('/usr/bin/python3', '-I', '-S', '-c', $probe) -InputText $request
+    if ($probeResult.ExitCode -ne 0 -or $probeResult.Output.Length -gt 65536) {
+        throw 'The strict isolated runtime probe failed.'
+    }
+    $report = (($probeResult.Output -join "`n") | ConvertFrom-Json)
+    $expected = @(
+        'public_ipv4', 'virtual_interfaces', 'tunnel_default_route',
+        'host_mount_hidden', 'interop_guarded', 'proxy_environment_clear',
+        'provider_openai', 'provider_anthropic', 'provider_deepseek'
+    )
+    foreach ($name in $expected) {
+        if (-not $report.checks.PSObject.Properties[$name] -or
+            $report.checks.$name -ne $true) {
+            throw ("Strict isolated runtime check failed: {0}" -f $name)
+        }
+    }
+    $dns = Invoke-IsolatedWsl -Generation $generation `
+        -Command @('/usr/bin/getent', 'ahostsv4', 'api.openai.com')
+    if ($dns.ExitCode -ne 0) {
+        throw 'DNS resolution through the tunnel failed in the strict launcher.'
+    }
+    $v6 = Invoke-IsolatedWsl -Generation $generation `
+        -Command @('/usr/bin/curl', '-6', '-fsS', '--connect-timeout', '8', 'https://ifconfig.co/ip')
+    if ($v6.ExitCode -eq 0) {
+        throw 'IPv6 egress unexpectedly succeeded in the strict launcher.'
+    }
+    $nft = Invoke-Wsl '/usr/sbin/nft list tables'
+    if ($nft.ExitCode -ne 0 -or
+        (($nft.Output -join "`n") -notmatch 'cor_egress_guard')) {
+        throw 'Linux fail-closed nftables guard is missing.'
+    }
+}
+
 try {
     $proof = Test-HighIntegrity
     Write-JobLog ('identity user={0} high={1} administrator={2}' -f
@@ -197,6 +303,20 @@ try {
     if (-not $proof.High -or -not $proof.Administrator) {
         Start-SelfElevated
     }
+
+    Write-JobLog 'stage 1a: restore the protected WireGuard profile'
+    $profileRestore = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+        (Join-Path $Repository 'scripts\wsl-secure-egress\Restore-WslEgressProfile.ps1'),
+        '-ProfilePath', $ProfilePath, '-Execute'
+    ) -StageName 'RestoreProfile'
+    $profileResponse = (($profileRestore | Out-String).Trim() | ConvertFrom-Json)
+    if ([string]$profileResponse.outcome -ne 'succeeded' -or
+        -not [bool]$profileResponse.hash_matches -or
+        -not [bool]$profileResponse.schema_valid) {
+        throw 'The protected WireGuard profile restore did not pass validation.'
+    }
+    Write-JobLog 'stage 1a: profile restored with hash, schema and ACL checks'
 
     Write-JobLog 'stage 1: repair repository and staging ACLs'
     Set-ProtectedDirectoryAcl -Path $Repository -KeepUserAccess
@@ -245,26 +365,29 @@ try {
     }
     Write-JobLog 'stage 3: broker start returned succeeded'
 
-    Write-JobLog ('stage 4: runtime acceptance in {0}' -f $TestDistro)
+    Write-JobLog ('stage 4: strict isolated runtime acceptance in {0}' -f $TestDistro)
     $checks = [System.Collections.Generic.List[string]]::new()
-    $public = Invoke-Wsl 'curl -4 -fsS --connect-timeout 15 https://ifconfig.co/ip'
-    if ($public.ExitCode -ne 0 -or (($public.Output -join '').Trim() -ne '62.84.164.122')) {
-        throw ('IPv4 egress assertion failed: {0}' -f (($public.Output -join ' ').Trim()))
+    $statePath = Join-Path $env:ProgramData 'ClashOfRust\WslEgress\state.json'
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        throw 'The broker state journal is missing after Start.'
     }
-    $checks.Add('ipv4=62.84.164.122')
-    $dns = Invoke-Wsl 'getent hosts api.openai.com'
-    if ($dns.ExitCode -ne 0) { throw 'DNS resolution through the tunnel failed.' }
-    $checks.Add('dns=resolved')
-    $v6 = Invoke-Wsl 'curl -6 -fsS --connect-timeout 10 https://ifconfig.co/ip'
-    if ($v6.ExitCode -eq 0) { throw 'IPv6 egress unexpectedly succeeded.' }
-    $checks.Add('ipv6=blocked')
-    $interop = Invoke-Wsl 'command -v ipconfig.exe'
-    if ($interop.ExitCode -eq 0) { throw 'Windows ipconfig.exe is reachable from the managed distro.' }
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if ([string]$response.generation -ne [string]$state.generation) {
+        throw 'The broker response does not match the installed state generation.'
+    }
+    if ([string]$state.phase -ne 'Running') {
+        throw 'The installed broker journal is not in the running phase after Start.'
+    }
+    Assert-IsolatedRuntime $response $state
+    $checks.Add('public_ipv4=62.84.164.122')
+    $checks.Add('virtual_interfaces=lo,wg0,cor-bg0')
+    $checks.Add('default_route=wg0')
+    $checks.Add('host_mounts=hidden')
     $checks.Add('interop=blocked')
-    $nft = Invoke-Wsl 'nft list tables'
-    if ($nft.ExitCode -ne 0 -or (($nft.Output -join "`n") -notmatch 'cor_egress_guard')) {
-        throw 'Linux fail-closed nftables guard is missing.'
-    }
+    $checks.Add('proxy_environment=clear')
+    $checks.Add('providers=openai,anthropic,deepseek')
+    $checks.Add('dns=resolved')
+    $checks.Add('ipv6=blocked')
     $checks.Add('nft=cor_egress_guard')
     Write-JobLog ('stage 4: ' + ($checks -join ', '))
 

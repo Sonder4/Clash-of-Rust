@@ -12,13 +12,41 @@ Linux helper expose the same lifecycle. All mutation commands are previews
 unless `-Execute` or `--execute` is explicitly supplied, except fixed
 root-owned service entry points documented in the Linux contract.
 
-## Status of this branch
+## Current status
+
+The current host is installed but deliberately disconnected:
+
+| Item | Current readback |
+| --- | --- |
+| Upstream baseline | `2615ebc` |
+| Last CI-verified branch head | `87ef6b2` (`0` behind and `73` ahead before later work) |
+| Current worktree | Additional review and recovery fixes are not yet represented by a CI run |
+| Windows WireGuard profile | `MISSING` at the protected Windows target |
+| Windows broker | `failed_closed_requested` |
+| Hyper-V endpoint exception | Present, `Enabled=False` |
+| Guardian service | `Running / Automatic`; this alone does not prove a tunnel |
+| Ubuntu 26.04 | NAT `eth0` only; DNS and `curl` are blocked |
+| Chrome, Codex CLI, Claude Code CLI, Claude Desktop | `NOT_RUN`; not installed or not verified on this host |
+
+The 2026-10-18 live results are historical evidence for the exact revisions and
+payloads used then. They are not evidence that the tunnel is online now.
 
 The repository implementation and offline tests can be reviewed without
 changing the local network. This is not a deployment or production acceptance
 record.
 
+The current user request is captured in three change records:
+
+- [WSL changes](WSL_CHANGES.md): Linux data plane, boot guard and lifecycle.
+- [Windows changes](WINDOWS_CHANGES.md): Hyper-V firewall, profile, guardian and
+  recovery boundary.
+- [Clash of Rust changes](CLASH_UI_CHANGES.md): minimal UI/controller surface and
+  upstream comparison.
+
 - Fixed-endpoint WireGuard is the only installable backend.
+- The manager distribution comes from the private profile. It may be an
+  existing ordinary distribution such as `Ubuntu-22.04` or `Ubuntu-26.04`.
+  A specially named distribution and a downloaded rootfs are not required.
 - Tailscale remains `BLOCKED` until a supported Windows-side cold-start
   boundary has been implemented and verified with real WSL/Hyper-V restart and
   fault tests.
@@ -38,6 +66,16 @@ record.
   layers and explicit non-goals.
 - [Operating guide](OPERATIONS.md) covers prerequisites, install, connect,
   status, tests, recovery and uninstall.
+- [Clash of WSL component](../../clash-of-wsl/README.md) documents the
+  standalone installation and resident service.
+- [Workspace tools](WORKSPACE_TOOLS.md) defines the VPS-gated Chrome, Codex CLI,
+  Claude Code CLI and Claude Desktop installation. The authoritative installer
+  is `scripts/wsl-secure-egress/tools/install-wsl-tools.sh`; the older
+  `install-workspace-tools.sh` path is an absolute-path compatibility wrapper.
+- [Deployment runbook](DEPLOY_RUNBOOK.md) records the administrator transaction
+  and its evidence requirements.
+- [Ubuntu 26.04 status](UBUNTU26_STATUS_2026-10-19.md) records the installed
+  distribution baseline.
 - [Compatibility](COMPATIBILITY.md) records supported Windows/WSL versions,
   network modes and unsupported workloads.
 - [Linux helper contract](../../scripts/wsl-secure-egress/linux/CONTRACT.md)
@@ -62,10 +100,10 @@ included in support reports.
 ## Quick start
 
 Install a reviewed Windows package from this fork, open **WSL Secure Egress**,
-and run **Doctor** and **安装预检** first. The full sequence requires an existing
-`COR-Egress` WSL distribution with the dependencies listed in the compatibility
-guide, a private profile and a dedicated VPS WireGuard service. See the
-[operating guide](OPERATIONS.md) before any host mutation.
+and run **预检** and **状态** first. The full sequence requires the ordinary WSL
+distribution selected in the private profile, the dependencies listed in the
+compatibility guide, a private profile and a dedicated VPS WireGuard service.
+See the [operating guide](OPERATIONS.md) before any host mutation.
 
 The mandatory Windows connectivity baseline is deliberately private and is not
 part of the upstream repository. Configure it at:

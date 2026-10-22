@@ -1,12 +1,11 @@
 #!/bin/sh
-# Install the F:\WSL Ubuntu-26.04 toolchain: Chrome, Codex CLI, Claude Code CLI
-# and Claude Code Desktop. APT repository packages are verified by APT's
-# configured signing keys; npm packages are installed by their exact version
-# specifiers and verified by their CLI version output. Run as root inside
-# Ubuntu-26.04.
+# Install the Ubuntu-26.04 workspace toolchain through a verified VPS egress.
+# APT packages use configured signing keys; npm packages use exact versions.
+# Run as root inside the managed namespace launcher, not in a plain distro shell.
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export http_proxy= https_proxy= all_proxy= HTTP_PROXY= HTTPS_PROXY= ALL_PROXY=
 
 log() { printf '[install-wsl-tools] %s\n' "$*"; }
 
@@ -15,6 +14,16 @@ require_root() {
         echo 'This tool requires root inside the WSL distribution.' >&2
         exit 1
     fi
+}
+
+require_vps_egress() {
+    actual="$(curl -4fsS --connect-timeout 12 --max-time 20 https://ifconfig.co/ip | tr -d '\r\n' || true)"
+    if [ "$actual" != "$EXPECTED_EGRESS_IPV4" ]; then
+        printf 'refusing installation: egress=%s expected=%s\n' \
+            "${actual:-unavailable}" "$EXPECTED_EGRESS_IPV4" >&2
+        exit 20
+    fi
+    log "verified VPS egress IPv4 ${actual}"
 }
 
 install_base_packages() {
@@ -121,6 +130,7 @@ report() {
 
 main() {
     require_root
+    require_vps_egress
     install_base_packages
     install_node
     install_chrome
@@ -129,6 +139,7 @@ main() {
     report
 }
 
+EXPECTED_EGRESS_IPV4="${EXPECTED_EGRESS_IPV4:-62.84.164.122}"
 NODE_VERSION="${NODE_VERSION:-v22.23.3}"
 NODESOURCE_KEY_URL="${NODESOURCE_KEY_URL:-https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key}"
 CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.302}"

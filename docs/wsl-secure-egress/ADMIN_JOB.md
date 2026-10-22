@@ -9,16 +9,31 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\wsl-secure-egress\COR-Full-AdminJob.ps1
 ```
 
-脚本先检查当前令牌是否同时满足管理员角色和 High integrity。中完整性令牌会通过 `Start-Process -Verb RunAs` 请求一次 UAC；取消或无法提权时只写 `FAILED.txt`，不会继续改动主机网络。也可以用 `-NoSelfElevation` 做只读前置验证，确认当前终端不具备管理员令牌时立即失败。
+脚本先检查当前令牌是否同时满足管理员角色和 High integrity。中完整性令牌
+必须通过 Windows `sudo.exe --new-window` 请求 UAC；脚本直接传递原生参数
+数组，不把含空格路径重新拼接成未引用的命令行。取消或无法提权时只写失败
+证据，不会继续改动主机网络。`-NoSelfElevation` 只用于证明非管理员令牌会
+立即失败，不得当作提权成功。
 
 阶段顺序固定为：
 
-1. 修复工作树、管理员工作目录和包 staging 的 ACL，并读取 `.git\HEAD` 作为回读证据。
-2. 生成受保护 manifest，执行 `Upgrade-Package.ps1` 的 `Apply` 和 `Commit`，每个子进程非零立即停止。
-3. 使用固定 WireGuard profile 启动已安装 broker。
-4. 在 `Ubuntu-26.04` 中断言德国 VPS IPv4 `62.84.164.122`、DNS 可解析、IPv6 阻断、`ipconfig.exe` 不可用以及 `cor_egress_guard` 存在。
+1. 恢复受保护 WireGuard profile，验证 SHA256、schema、密钥格式及 ACL。
+2. 修复工作树、管理员工作目录和包 staging 的受控 ACL，并读取
+   `.git\HEAD` 作为回读证据。
+3. 生成受保护 manifest，执行 `Upgrade-Package.ps1` 的 `Apply` 和
+   `Commit`，每个子进程非零立即停止。
+4. 使用恢复后的固定 profile 启动已安装 broker。
+5. 在严格启动器中断言德国 VPS IPv4、DNS、IPv6、`wg0` 默认路由、
+   namespace 可见性、Windows interop 和宿主挂载边界，并验证 OpenAI、
+   Anthropic、DeepSeek 的 TLS 主页面可达。
 
-只有所有阶段和断言都通过才会写入 `DONE.txt`。失败会写入 `FAILED.txt` 和 `REPORT.txt`，保留 fail-closed 状态；旧的 `DONE.txt` 会在每次运行开始时删除，避免把历史结果误当成当前成功。
+只有所有阶段和断言都通过才会写入当前作业的成功状态。失败会保留
+fail-closed 状态并写出失败报告；历史 `DONE.txt`、UAC 弹窗出现或
+`sudo.exe` 返回 0 都不能单独证明成功。
+
+当前只读状态仍是 profile 缺失、endpoint 禁用、broker
+`failed_closed_requested`。最近没有管理员成功证据；实机事务和所有出口测试
+保持 `NOT_RUN`。
 
 ## 2026-10-19 实机记录
 

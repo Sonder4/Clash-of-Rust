@@ -701,6 +701,7 @@ impl State {
                     | "blocked"
                     | "failed"
                     | "preparing"
+                    | "prepared_for_reinstall"
                     | "closure_unverified"
             )
         {

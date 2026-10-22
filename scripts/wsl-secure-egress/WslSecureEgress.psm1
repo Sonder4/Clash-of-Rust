@@ -1569,6 +1569,11 @@ def https_json(url):
     with opener.open(url,timeout=12) as response:
         if response.status!=200: raise RuntimeError('unexpected status')
         return json.loads(response.read(65537))
+def https_reachable(host):
+    req=urllib.request.Request('https://'+host+'/',headers={'User-Agent':'ClashOfWSL-Acceptance/1'})
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req,timeout=12) as response:
+        return 100 <= response.status < 500
 try:
     echo=https_json('https://api.ipify.org?format=json')
     address=ipaddress.IPv4Address(echo['ip'])
@@ -1590,12 +1595,28 @@ try:
     checks['host_mount_hidden']=not pathlib.Path('/mnt/c').exists() and not pathlib.Path('/init').exists()
 except Exception:
     checks['virtual_interfaces']=False;checks['host_mount_hidden']=False
+try:
+    routes=json.loads(subprocess.check_output(['/usr/sbin/ip','-j','route','show','default'],timeout=5))
+    checks['tunnel_default_route']=len(routes)==1 and routes[0].get('dev')=='wg0'
+except Exception:
+    checks['tunnel_default_route']=False
 checks['interop_guarded']=not pathlib.Path('/mnt/c/Windows/System32/ipconfig.exe').exists()
 checks['proxy_environment_clear']=not any(name.lower().endswith('proxy') for name in os.environ)
+for name,host in request['providers'].items():
+    try: checks['provider_'+name]=https_reachable(host)
+    except Exception: checks['provider_'+name]=False
 print(json.dumps({'schema':1,'generation':request['generation'],'checks':checks}))
 '@
     $expected = if ($State.Contains('expected_egress_ipv4')) { [string]$State.expected_egress_ipv4 } else { [string]$State.endpoint_ipv4 }
-    $request = [ordered]@{ generation = [long]$State.generation; expected_ipv4 = $expected }
+    $request = [ordered]@{
+        generation = [long]$State.generation
+        expected_ipv4 = $expected
+        providers = [ordered]@{
+            openai = 'api.openai.com'
+            anthropic = 'api.anthropic.com'
+            deepseek = 'api.deepseek.com'
+        }
+    }
     $response = Invoke-WslEgressProcess -Arguments @('--distribution',[string]$State.manager_distro,
         '--user','root','--exec',$script:LinuxHelper,'run','--generation',[string]$State.generation,
         '--','/usr/bin/python3','-I','-S','-c',$probe) `
@@ -1604,7 +1625,10 @@ print(json.dumps({'schema':1,'generation':request['generation'],'checks':checks}
         throw 'The isolated functional probe did not complete.'
     }
     $result = $response.Output | ConvertFrom-Json
-    $names = @('functional_egress','german_exit','ipv4_only','virtual_interfaces','host_mount_hidden','interop_guarded','proxy_environment_clear')
+    $names = @('functional_egress','german_exit','ipv4_only','virtual_interfaces',
+        'tunnel_default_route','host_mount_hidden','interop_guarded',
+        'proxy_environment_clear','provider_openai','provider_anthropic',
+        'provider_deepseek')
     if ($result.schema -ne 1 -or $result.generation -ne $State.generation -or
         @($result.checks.PSObject.Properties).Count -ne $names.Count) { throw 'Invalid isolated functional probe response.' }
     foreach ($name in $names) {

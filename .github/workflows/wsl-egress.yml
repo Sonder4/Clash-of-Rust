@@ -31,6 +31,7 @@ jobs:
           python3 -m compileall -q scripts/wsl-secure-egress
           python3 -B scripts/wsl-secure-egress/tests/linux_static_test.py
           python3 -B scripts/wsl-secure-egress/tests/acceptance_harness_unit.py
+          python3 -B scripts/wsl-secure-egress/tests/tool-installer-static-unit.py
           python3 scripts/wsl-secure-egress/tests/server_unit.py
           sudo python3 -I -B scripts/wsl-secure-egress/tests/payload_unit.py
           python3 scripts/wsl-secure-egress/tests/provision_unit.py
@@ -66,6 +67,8 @@ jobs:
             './scripts/wsl-secure-egress/tests/windows-unit.ps1',
             './scripts/wsl-secure-egress/tests/elevation-unit.ps1',
             './scripts/wsl-secure-egress/tests/admin-job-acl.ps1',
+            './scripts/wsl-secure-egress/tests/restore-profile-unit.ps1',
+            './scripts/wsl-secure-egress/tests/prepare-package-stage-unit.ps1',
             './scripts/wsl-secure-egress/tests/windows-workflow.ps1',
             './scripts/wsl-secure-egress/tests/package-upgrade-unit.ps1'
           )) {

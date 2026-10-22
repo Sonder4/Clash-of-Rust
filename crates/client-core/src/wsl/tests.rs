@@ -380,6 +380,16 @@ fn current_broker_diagnostics_preserve_fixed_codes_and_do_not_promote_partial_te
 }
 
 #[test]
+fn prepared_for_reinstall_remains_a_known_protected_phase() {
+    let mut raw = fixture(Action::Status, 10);
+    raw["phase"] = json!("prepared_for_reinstall");
+    let result = parse(raw);
+    assert_eq!(result.phase, "prepared_for_reinstall");
+    assert_eq!(result.protection, Protection::Blocked);
+    assert!(!result.functional_ready());
+}
+
+#[test]
 fn installation_preflight_can_report_an_existing_backend_without_applying_the_draft() {
     let mut state = State::default();
     let mut req = request(Action::Install);
