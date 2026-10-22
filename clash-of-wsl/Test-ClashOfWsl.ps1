@@ -75,6 +75,24 @@ if (Test-Path -LiteralPath $installer -PathType Leaf) {
     Invoke-Assert 'installer requests UAC' ($text -match 'RunAs')
     Invoke-Assert 'installer previews by default' ($text -match 'not_run')
     Invoke-Assert 'installer refuses without elevation' ($text -match 'NoSelfElevation')
+    Invoke-Assert 'installer quotes elevated arguments' (
+        $text -match 'ConvertTo-WindowsCommandLineArgument' -and
+        $text -match '-ArgumentList \$commandLine'
+    )
+    Invoke-Assert 'restore failure aborts before service removal' (
+        $text.IndexOf("if (`$restoreOutcome -ne 'succeeded')") -lt
+        $text.IndexOf('$stopped = $false')
+    )
+    Invoke-Assert 'generic uninstall cannot remove recovery tooling' (
+        $text -match 'Uninstall requires -RestoreOriginalNetwork' -and
+        $text.IndexOf("if (-not `$RestoreOriginalNetwork)") -lt
+        $text.IndexOf("`$restoreOutcome = 'not_run'")
+    )
+    Invoke-Assert 'install registers the owned guardian service' (
+        $text -match 'Install-OwnedGuardianService' -and
+        $text -match 'New-Service' -and
+        $text -match 'Start-Service'
+    )
 }
 
 # --- daemon must not open the tunnel itself ------------------------------
@@ -109,4 +127,4 @@ if ($failures.Count -eq 0) {
     assertions = $script:assertions
     failures = @($failures)
 } | ConvertTo-Json -Compress
-exit 1
+exit 1

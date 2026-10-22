@@ -82,14 +82,58 @@ function Start-SelfElevated {
         '-TestDistro', $TestDistro,
         '-NoSelfElevation'
     )
-    try {
-        $child = Start-Process -FilePath 'powershell.exe' -Verb RunAs `
-            -ArgumentList $args -PassThru -Wait -ErrorAction Stop
-        if ([int]$child.ExitCode -ne 0) {
-            Set-Content -LiteralPath $FailedPath -Value (
-                'elevation child exited with code ' + [int]$child.ExitCode)
+    function ConvertTo-WindowsCommandLineArgument([string]$Value) {
+        if ($null -eq $Value) { $Value = '' }
+        if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+        $builder = New-Object Text.StringBuilder
+        [void]$builder.Append('"')
+        $slashes = 0
+        foreach ($character in $Value.ToCharArray()) {
+            if ($character -eq '\') {
+                $slashes++
+                continue
+            }
+            if ($character -eq '"') {
+                if ($slashes -gt 0) { [void]$builder.Append(('\' * ($slashes * 2))) }
+                [void]$builder.Append('\')
+                [void]$builder.Append('"')
+                $slashes = 0
+                continue
+            }
+            if ($slashes -gt 0) { [void]$builder.Append(('\' * $slashes)); $slashes = 0 }
+            [void]$builder.Append($character)
         }
-        exit ([int]$child.ExitCode)
+        if ($slashes -gt 0) { [void]$builder.Append(('\' * ($slashes * 2))) }
+        [void]$builder.Append('"')
+        $builder.ToString()
+    }
+    try {
+        # Start-Process -Verb RunAs can return a medium-integrity child on this
+        # host, so elevation is delegated to Windows sudo, which enforces its
+        # own consent contract. This host forces new-window mode. Sudo does not
+        # expose the elevated child's exit code, so success is proved only by
+        # the DONE/FAILED journal written by the child.
+        # Start-Process treats an ArgumentList array differently across
+        # Windows PowerShell and PowerShell 7. Build one Windows command line
+        # with CommandLineToArgvW-compatible quoting so paths containing
+        # spaces remain a single argument in the elevated child.
+        $sudoCommandLine = (@('--new-window', 'powershell.exe') + $args |
+            ForEach-Object { ConvertTo-WindowsCommandLineArgument ([string]$_) }) -join ' '
+        $waiting = Start-Process -FilePath 'C:\Windows\System32\sudo.exe' `
+            -ArgumentList $sudoCommandLine `
+            -PassThru -Wait -ErrorAction Stop
+        if ([int]$waiting.ExitCode -ne 0) {
+            Set-Content -LiteralPath $FailedPath -Value (
+                'elevation request failed with exit code ' + [int]$waiting.ExitCode)
+            exit ([int]$waiting.ExitCode)
+        }
+        if (Test-Path -LiteralPath $DonePath -PathType Leaf) {
+            exit 0
+        }
+        if (-not (Test-Path -LiteralPath $FailedPath -PathType Leaf)) {
+            Set-Content -LiteralPath $FailedPath -Value 'elevated child exited without a completion journal'
+        }
+        exit 1
     } catch {
         Set-Content -LiteralPath $FailedPath -Value ('elevation cancelled: ' + $_.Exception.Message)
         exit 1223

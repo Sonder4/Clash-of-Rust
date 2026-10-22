@@ -161,8 +161,9 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal ($upgradeText.Contains('repair-config')) $true 'live upgrade reruns the manager repair path'
     Assert-Equal ($upgradeText.Contains('-ReviewedUpgrade')) $true 'live upgrade uses the atomic reviewed upgrade gate'
     Assert-Equal ($upgradeText.Contains('Set-WslEgressEndpoint $state $true')) $false 'live upgrade never opens the endpoint'
-    Assert-Equal ($upgradeText.Contains('$Progress.stage')) $true 'live upgrade records the exact failure stage through caller-owned state'
-    Assert-Equal ($upgradeText.Contains('$StatusFile')) $true 'live upgrade durably records the exact failure stage across module scope'
+    Assert-Equal ($upgradeText.Contains('$Progress.stage')) $true 'live upgrade records the in-memory failure stage'
+    Assert-Equal ($upgradeText.Contains('$stageStatusPath')) $true 'live upgrade records the exact failure stage across module scope'
+    Assert-Equal ($upgradeText.Contains('$StatusFile')) $true 'live upgrade writes each module stage to the caller-owned status file'
     $stageFixture = Join-Path ([IO.Path]::GetTempPath()) ('cor-egress-stage-' + [guid]::NewGuid().ToString('N') + '.json')
     try {
         $script = {

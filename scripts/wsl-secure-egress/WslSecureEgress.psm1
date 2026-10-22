@@ -1806,7 +1806,7 @@ function Invoke-WslEgressOperation {
             if ($state) {
                 if ($state.phase -eq 'restored') {
                     $retiredState = $state
-                } elseif ($state.phase -in @('preparing','blocked','failed_closed_requested','closure_unverified')) {
+                } elseif ($state.phase -in @('preparing','prepared_for_reinstall','blocked','failed_closed_requested','closure_unverified')) {
                     $linuxStarted = [bool](Get-WslEgressStateValue $state 'linux_manager_install_started' $false)
                     $linuxInstalled = [bool](Get-WslEgressStateValue $state 'linux_manager_installed' $false)
                     if ($state.phase -eq 'blocked' -or $linuxStarted -or $linuxInstalled) {

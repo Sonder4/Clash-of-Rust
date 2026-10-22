@@ -88,11 +88,19 @@ def read_journal(path):
     return state
 
 
-def verify_owned_file(path, expected, label):
+def verify_owned_file(path, expected, label, allow_missing=False):
     try:
         info = path.lstat()
     except FileNotFoundError:
-        return False
+        # A journal flag means this exact file was created by the retirement
+        # transaction.  Its absence is tampering or an incomplete external
+        # change, not proof that there is nothing to restore.  Refuse the
+        # rollback while leaving every original file untouched.  The only
+        # exception is an idempotent retry of a rollback already in progress,
+        # or a prepared journal that never reached the write step.
+        if allow_missing:
+            return False
+        raise ValueError(f'{label} is missing; restore refused.')
     if not safe_root_file(info) or path.read_bytes() != expected:
         raise ValueError(f'{label} changed; restore refused.')
     return True
@@ -175,10 +183,12 @@ def main():
         for entry in state['units']:
             if current.get(entry['unit'], {}).get('sha256') != entry['sha256']:
                 raise ValueError('Legacy unit changed; restore refused.')
+        allow_missing = state['phase'] in ('prepared', 'restoring')
         apt_present = (state['apt_override_created']
-                       and verify_owned_file(OVERRIDE, CONTENT, 'APT override'))
+                       and verify_owned_file(OVERRIDE, CONTENT, 'APT override', allow_missing))
         runtime_present = (state['runtime_override_created']
-                           and verify_owned_file(RUNTIME, RUNTIME_CONTENT, 'Runtime override'))
+                           and verify_owned_file(RUNTIME, RUNTIME_CONTENT, 'Runtime override',
+                                                 allow_missing))
         state['phase'] = 'restoring'
         save(args.journal, state)
         if apt_present:

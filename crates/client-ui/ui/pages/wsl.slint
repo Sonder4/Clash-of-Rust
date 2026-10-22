@@ -87,7 +87,8 @@ export component WslPage inherits Rectangle {
                 HorizontalLayout {
                     spacing: Theme.content-gap;
                     if !UiData.wsl-installed: WslActionButton { text: "安装"; action: "Install"; primary: true; }
-                    if UiData.wsl-installed: WslActionButton { text: "回退"; action: "Rollback"; danger: true; }
+                    if UiData.wsl-installed: WslActionButton { text: "断开并保留保护"; action: "Rollback"; mode: "execute"; }
+                    if UiData.wsl-installed: WslActionButton { text: "恢复原网络"; action: "Rollback"; mode: "restore-confirm"; danger: true; }
                 }
                 if UiData.wsl-admin-command != "": Paragraph { text: UiData.wsl-admin-command; font-size: Theme.detail-size; color: Theme.secondary; }
             }
@@ -134,4 +135,4 @@ export component WslPage inherits Rectangle {
             Rectangle { vertical-stretch: 1; }
         }
     }
-}
+}

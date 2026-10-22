@@ -634,6 +634,15 @@ class RetireLegacyTests(unittest.TestCase):
         self.assertTrue(self.runtime.exists())
         self.assertEqual(self.calls, [])
 
+    def test_rollback_refuses_missing_owned_override(self):
+        self.make_rollback_state()
+        self.override.unlink()
+        with self.assertRaisesRegex(ValueError, 'APT override is missing'):
+            self.invoke('--rollback')
+        self.assertFalse(self.override.exists())
+        self.assertTrue(self.runtime.exists())
+        self.assertEqual(self.calls, [])
+
     def test_rollback_rejects_non_whitelisted_unit_and_malformed_digest(self):
         state = self.make_rollback_state()
         state['units'][0]['unit'] = 'attacker.service'

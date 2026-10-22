@@ -602,3 +602,64 @@ acceptance confirms the VPS source address, tunnel DNS, and IPv6 policy.
 
 The Claude user service remains disabled as a fail-safe; its original unit
 backup is preserved in the root-only WSL backup directory above.
+
+## 2026-10-22 current fork review repair
+
+This section records only commands executed on 2026-10-22. It does not change
+the production host state described above.
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| Clash of WSL component tests | PASS, 22 assertions | `clash-of-wsl/Test-ClashOfWsl.ps1`; structure, parser and installer static checks only |
+| Windows broker unit suite | PASS, 166 assertions | `tests/windows-unit.ps1`; host/WSL/network boundaries mocked |
+| Windows workflow suite | PASS, 244 assertions | `tests/windows-workflow.ps1`; no WSL start, firewall or task mutation |
+| Windows elevation suite | PASS, 21 assertions | `tests/elevation-unit.ps1`; UAC is NOT_RUN |
+| Package-upgrade suite | PASS, 53 assertions | `tests/package-upgrade-unit.ps1`; installed services unchanged |
+| Linux static/boot-guard suite | PASS, 87 tests, 2 skipped | Windows-host invocation; native permission and arch cases skipped |
+| VPS server validation | PASS, 24 tests | Offline profile validation |
+| Payload upgrade suite | PASS, 32 tests, 16 skipped | Portable cases passed; native root/flock cases skipped outside Linux root |
+| Acceptance harness | PASS, 3 tests | Offline endpoint validation |
+| VPS provisioning suite | PASS, 27 tests | Offline mocked host boundaries |
+| PowerShell parser sweep | PASS | Module, admin job, installer self-test and repaired upgrade script |
+| Linux syntax sweep | PASS | Ubuntu-22.04 `py_compile` and `bash -n`; no package or network change |
+| Rust UI test binary | PASS, 101 tests | `cargo test -p clash-of-rust --bin clash-of-rust --locked` |
+| Rust formatting | PASS | `cargo fmt --all -- --check` |
+| Rust compile check | PASS | `cargo check -p clash-of-rust --bin clash-of-rust --locked`, 122 crates |
+| Git whitespace check | PASS | `git diff --check` |
+
+The review repair includes the following behavior changes:
+
+- `ClashOfWsl` now builds a Windows command line with quote-aware arguments
+  before requesting UAC, so source paths under `Program Files` remain one
+  argument.
+- The installer registers and starts the owned SYSTEM guardian only after
+  copying the payload. A generic uninstall is refused; the explicit
+  `-RestoreOriginalNetwork` path must succeed before the service or recovery
+  payload is removed.
+- `Update-LiveWslPayload` uses a caller-owned durable stage file, so a failure
+  inside module scope cannot be mislabeled as `preflight`.
+- A missing journal-owned legacy override now refuses rollback. Missing files
+  are tolerated only while the second phase of an interrupted rollback is
+  finishing.
+- A `prepared_for_reinstall` journal enters partial recovery instead of the
+  adoption path.
+- The Slint page restores the explicit “恢复原网络” confirmation action while
+  retaining the safer “断开并保留保护” action.
+
+A first repository-wide syntax sweep incorrectly invoked Windows Python and
+native Bash with Windows paths. It reported path/tool failures and is retained
+here as a failed attempt; the corrected Ubuntu-22.04 invocation passed. This
+host tooling mistake did not indicate a source syntax failure.
+
+Live WSL state remains fail-closed at the end of this run:
+
+- Broker phase: `failed_closed_requested`
+- Hyper-V endpoint rule: disabled
+- Runtime acceptance: `NOT_RUN`
+- Scope renewal: `not_run`
+
+No administrator tunnel start, VPS egress check, OpenAI/Anthropic/DeepSeek
+request, Claude Code test, Claude Desktop test, cold boot, reboot, network
+switch, or restore/reinstall live acceptance was executed in this section.
+Those items remain `NOT_RUN` or `BLOCKED` until authoritative live evidence is
+captured.

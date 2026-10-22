@@ -54,6 +54,20 @@ if (-not $Execute) {
 }
 $module = Import-Module (Join-Path $PSScriptRoot 'WslSecureEgress.psm1') -Force -PassThru -DisableNameChecking
 $progress = [pscustomobject]@{ stage = 'preflight' }
+$stageStatusPath = if ($StatusPath) {
+    [IO.Path]::GetFullPath($StatusPath)
+} else {
+    Join-Path $env:LOCALAPPDATA ('ClashOfRust\WslEgress\payload-update-stage-' +
+        [guid]::NewGuid().ToString('N') + '.json')
+}
+$stageDirectory = Split-Path -Parent $stageStatusPath
+New-Item -ItemType Directory -Path $stageDirectory -Force | Out-Null
+try {
+    [ordered]@{ stage = 'preflight' } | ConvertTo-Json -Compress |
+        Set-Content -LiteralPath $stageStatusPath -Encoding ASCII -ErrorAction Stop
+} catch {
+    $progress.stage = 'preflight'
+}
 try {
     $result = & $module {
         param($RequestedDistro, $Progress, $StatusFile)
@@ -131,14 +145,15 @@ try {
         Save-WslEgressJson $result $receipt
         $result['receipt'] = $receipt
         $result
-    } $Distro $progress $StatusPath
+    } $Distro $progress $stageStatusPath
     $result | ConvertTo-Json -Depth 8 -Compress
 } catch {
-    # Module scope cannot reliably assign properties on a caller-owned object
-    # under every host. The optional status file provides the durable boundary;
-    # retain the in-memory object too for direct/imported-script invocation.
-    $failureStage = Read-PayloadUpdateStatus $StatusPath
+    # The module writes each stage to a caller-owned durable file. In-memory
+    # object mutation is intentionally not treated as a cross-module contract.
+    $failureStage = Read-PayloadUpdateStatus $stageStatusPath
     if (-not $failureStage) { $failureStage = [string]$progress.stage }
     Write-PayloadUpdateFailure $failureStage $_
     exit 1
+} finally {
+    Remove-Item -LiteralPath $stageStatusPath -Force -ErrorAction SilentlyContinue
 }

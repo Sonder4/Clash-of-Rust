@@ -217,24 +217,36 @@ fn wsl_native_buttons_dispatch_preview_and_busy_state_keeps_navigation_available
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    let mut doctor_y = None;
+    // The condensed WSL page exposes only read-only actions in the first card:
+    // "刷新状态" (Status), "安装预检" (Install) and "查看日志". There is no
+    // separate Doctor button, so the probe targets the install preflight row.
+    let mut preflight_y = None;
     // Text metrics vary across platforms; probe the small first-row region,
     // not the full window, and never execute any recorded network intent.
-    for y in (144..216).step_by(8) {
-        events.borrow_mut().clear();
-        ui_testing::click(window.window(), 250.0, y as f32);
-        if events.borrow().iter().any(|(intent, action, mode)| {
-            *intent == Intent::WslAction && action == "Doctor" && mode == "preview"
-        }) {
-            doctor_y = Some(y as f32);
+    // The compact WSL page has platform-dependent card and text metrics. Keep
+    // this probe bounded to the first action card while allowing the action
+    // row to move when the renderer uses different font ascent/line spacing.
+    for y in (280..680).step_by(8) {
+        for x in [80, 180, 280, 380] {
+            events.borrow_mut().clear();
+            ui_testing::click(window.window(), x as f32, y as f32);
+            if events.borrow().iter().any(|(intent, action, mode)| {
+                *intent == Intent::WslAction && action == "Install" && mode == "preview"
+            }) {
+                preflight_y = Some(y as f32);
+                break;
+            }
+        }
+        if preflight_y.is_some() {
             break;
         }
     }
-    let doctor_y = doctor_y.expect("native Doctor button must emit the read-only preview intent");
+    let preflight_y = preflight_y
+        .expect("native install preflight button must emit the read-only preview intent");
     events.borrow_mut().clear();
     data.set_wsl_busy(true);
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 250.0, doctor_y);
+    ui_testing::click(window.window(), 250.0, preflight_y);
     assert!(
         events.borrow().is_empty(),
         "busy controls must suppress duplicate operations"
