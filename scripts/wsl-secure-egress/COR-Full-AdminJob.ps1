@@ -161,11 +161,14 @@ function Set-ProtectedDirectoryAcl {
         throw "Required directory is missing: $Path"
     }
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    # icacls treats a bare SID as an account name and resolves it before
+    # writing the ACL. Prefixing the SID with "*" selects the SID form, which
+    # does not depend on an account-name mapping in the elevated token.
     $rules = @(
-        'SYSTEM:(OI)(CI)F',
-        'Administrators:(OI)(CI)F'
+        '*S-1-5-18:(OI)(CI)F',
+        '*S-1-5-32-544:(OI)(CI)F'
     )
-    if ($KeepUserAccess) { $rules += "${sid}:(OI)(CI)F" }
+    if ($KeepUserAccess) { $rules += "*${sid}:(OI)(CI)F" }
     $result = @(& icacls.exe $Path /inheritance:r /grant:r @rules /T /C 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw ('ACL repair failed for {0}: {1}' -f $Path, (($result | Out-String).Trim()))
