@@ -172,6 +172,28 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         Assert-Equal $script:Fixture.endpoint_enabled $true 'configuration rejection does not change the installed endpoint'
     }
 
+    # A host restart or a WSL shutdown clears WFP filters, so the recorded Docker
+    # containment must be re-established before the scope audit. The endpoint is
+    # still closed while this repair runs.
+    Reset-Fixture
+    $script:Fixture.docker_backends = @('C:\Docker\com.docker.backend.exe')
+    $script:Calls.Clear()
+    $restored = Invoke-WslEgressOperation -Action Start -Execute
+    Assert-Equal $restored.outcome 'succeeded' 'Start restores the recorded Docker guard before the scope audit'
+    Assert-Equal (@($script:Calls | Where-Object { $_ -eq 'docker:False' }).Count) 1 'Start re-establishes the recorded Docker guard exactly once'
+    $dockerIndex = [array]::IndexOf($script:Calls.ToArray(), 'docker:False')
+    $auditIndex = [array]::IndexOf($script:Calls.ToArray(), 'full-scope-audit')
+    Assert-Equal ($dockerIndex -ge 0 -and $auditIndex -ge 0 -and $dockerIndex -lt $auditIndex) $true 'Docker guard is restored before the scope audit runs'
+    Assert-Equal ($script:Calls -contains 'endpoint:True') $true 'restored Docker guard does not prevent the endpoint from opening'
+    Assert-Equal $script:Fixture.endpoint_enabled $true 'successful Start opens the endpoint after guard restoration'
+
+    Reset-Fixture
+    $script:Fixture.docker_backends = @()
+    $script:Calls.Clear()
+    $noDocker = Invoke-WslEgressOperation -Action Start -Execute
+    Assert-Equal $noDocker.outcome 'succeeded' 'Start succeeds when no Docker backend was recorded'
+    Assert-Equal ($script:Calls -contains 'docker:False') $false 'Start does not install a Docker guard without recorded backends'
+
     Reset-Fixture
     $script:BaselineGood = $false
     $rejected = Invoke-WslEgressOperation -Action Start -Execute

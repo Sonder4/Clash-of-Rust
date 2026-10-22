@@ -1988,6 +1988,13 @@ function Invoke-WslEgressOperation {
         elseif ($Action -eq 'Start') {
             $stage = 'host_guard_audit'
             if (-not (Get-WslEgressGuardAudit $state).valid) { throw 'Host guard is not effective.' }
+            $stage = 'docker_guard_restore'
+            # A host restart or WSL shutdown clears WFP filters, so the recorded
+            # Docker containment must be re-established before the scope audit.
+            # The endpoint stays closed while this runs.
+            if (@(Get-WslEgressStateValue $state 'docker_backends' @()).Count -gt 0) {
+                Set-WslEgressDockerGuard $state
+            }
             $stage = 'installed_profile_identity'
             $profile = $null
             if ($ProfilePath) {

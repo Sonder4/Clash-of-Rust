@@ -40,6 +40,18 @@ function Get-Sha256Bytes([byte[]]$Bytes) {
     }
 }
 
+function Get-Sha256File([string]$Path) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '')
+    } finally {
+        if ($stream) { $stream.Dispose() }
+        $sha.Dispose()
+    }
+}
+
 function Read-LinuxProfile([string]$Distro, [string]$Executable) {
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Executable
@@ -126,35 +138,32 @@ function Assert-ProtectedDirectory([string]$Path) {
 }
 
 function Set-ProfileAcl([string]$Directory, [string]$File) {
+    # .NET ACL APIs are used instead of Set-Acl because the elevated worker
+    # environment cannot always autoload the PowerShell security module.
+    function New-Rule([string]$Sid, [string]$Rights, [string]$Inheritance) {
+        [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($Sid), $Rights, $Inheritance, 'None', 'Allow')
+    }
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    # Directory ACEs stay inheritable so later results and receipts written by
+    # an elevated helper remain readable by the installing user.
     $directoryAcl = [Security.AccessControl.DirectorySecurity]::new()
     $directoryAcl.SetAccessRuleProtection($true, $false)
     foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
-        $directoryAcl.AddAccessRule(
-            [Security.AccessControl.FileSystemAccessRule]::new(
-                [Security.Principal.SecurityIdentifier]::new($sid),
-                'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+        $directoryAcl.AddAccessRule((New-Rule $sid 'FullControl' 'ContainerInherit,ObjectInherit'))
     }
-    $directoryAcl.AddAccessRule(
-        [Security.AccessControl.FileSystemAccessRule]::new(
-            [Security.Principal.WindowsIdentity]::GetCurrent().User,
-            'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+    $directoryAcl.AddAccessRule((New-Rule $currentSid 'ReadAndExecute' 'ContainerInherit,ObjectInherit'))
     $directoryAcl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
-    Set-Acl -LiteralPath $Directory -AclObject $directoryAcl
+    [IO.Directory]::SetAccessControl($Directory, $directoryAcl)
 
     $fileAcl = [Security.AccessControl.FileSecurity]::new()
     $fileAcl.SetAccessRuleProtection($true, $false)
     foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
-        $fileAcl.AddAccessRule(
-            [Security.AccessControl.FileSystemAccessRule]::new(
-                [Security.Principal.SecurityIdentifier]::new($sid),
-                'FullControl', 'None', 'None', 'Allow'))
+        $fileAcl.AddAccessRule((New-Rule $sid 'FullControl' 'None'))
     }
-    $fileAcl.AddAccessRule(
-        [Security.AccessControl.FileSystemAccessRule]::new(
-            [Security.Principal.WindowsIdentity]::GetCurrent().User,
-            'Read', 'None', 'None', 'Allow'))
+    $fileAcl.AddAccessRule((New-Rule $currentSid 'Read' 'None'))
     $fileAcl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
-    Set-Acl -LiteralPath $File -AclObject $fileAcl
+    [IO.File]::SetAccessControl($File, $fileAcl)
 }
 
 function Write-ProtectedProfile([string]$Target, [byte[]]$Bytes) {
@@ -165,7 +174,7 @@ function Write-ProtectedProfile([string]$Target, [byte[]]$Bytes) {
     $temporary = Join-Path $directory ('.profile-' + [guid]::NewGuid().ToString('N') + '.tmp')
     try {
         [IO.File]::WriteAllBytes($temporary, $Bytes)
-        if ((Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash -ne $ExpectedSha256) {
+        if ((Get-Sha256File $temporary) -ne $ExpectedSha256) {
             throw 'The temporary profile hash changed.'
         }
         Set-ProfileAcl $directory $temporary
@@ -175,7 +184,7 @@ function Write-ProtectedProfile([string]$Target, [byte[]]$Bytes) {
             [IO.File]::Move($temporary, $full)
         }
         Set-ProfileAcl $directory $full
-        if ((Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash -ne $ExpectedSha256) {
+        if ((Get-Sha256File $full) -ne $ExpectedSha256) {
             throw 'The installed profile hash does not match the approved value.'
         }
     } finally {
