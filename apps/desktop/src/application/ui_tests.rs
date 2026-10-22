@@ -245,17 +245,13 @@ fn wsl_native_buttons_dispatch_preview_and_busy_state_keeps_navigation_available
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    // The condensed WSL page exposes only read-only actions in the first card:
-    // "刷新状态" (Status), "安装预检" (Install) and "查看日志". There is no
-    // separate Doctor button, so the probe targets the install preflight row.
+    // The compact WSL page exposes Status, install preflight and Test in its
+    // first action card. Leave recovery and configuration behind "高级".
     let mut preflight_y = None;
     // Text metrics vary across platforms; probe the small first-row region,
     // not the full window, and never execute any recorded network intent.
-    // The compact WSL page has platform-dependent card and text metrics. Keep
-    // this probe bounded to the first action card while allowing the action
-    // row to move when the renderer uses different font ascent/line spacing.
-    // The operation card follows the status card. Probe only that card's
-    // control row to avoid invoking every other native control in the page.
+    // Text ascent and card spacing depend on the renderer. Probe only the
+    // action card and stop at the first matching install-preview intent.
     for y in (320..620).step_by(8) {
         for x in (280..840).step_by(48) {
             events.borrow_mut().clear();

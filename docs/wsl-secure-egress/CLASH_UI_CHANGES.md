@@ -17,6 +17,13 @@ page displays endpoint, phase, protection, acceptance and bounded logs using
 the shared page components. Test and status results continue to distinguish
 `PASS`, `FAIL`, `BLOCKED` and `NOT_RUN`.
 
+The page is intentionally compact. Its first card shows transport, exit and
+protection status; the second keeps the primary connect/install action plus
+read-only Status, Test and preflight; endpoint/profile fields, logs and the two
+recovery actions are disclosed through **高级**. This follows the existing
+network and diagnostic pages while preserving an explicit danger-styled
+**恢复原网络** confirmation action.
+
 Endpoint IPv4 and port are visible configuration fields, but they do not replace
 the private WireGuard profile. Executed Install and Start requests require a
 profile path; endpoint-only input is rejected before a privileged command is

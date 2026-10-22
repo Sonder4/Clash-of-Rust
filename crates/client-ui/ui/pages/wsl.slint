@@ -37,6 +37,7 @@ component StatusRow inherits Rectangle {
 
 export component WslPage inherits PageSurface {
     property <bool> logs-open: false;
+    property <bool> advanced-open: false;
     ScrollView {
         x: 0px;
         width: parent.width + Theme.content-gap;
@@ -70,47 +71,38 @@ export component WslPage inherits PageSurface {
                 if UiData.wsl-guidance != "": Paragraph { text: UiData.wsl-guidance; color: Theme.warning; }
             }
             ContentPanel {
-                Heading { text: "操作"; }
-                HorizontalLayout {
+                HorizontalLayout { cross-axis-alignment: center;
                     spacing: Theme.content-gap;
-                    if !UiData.wsl-installed: WslActionButton { text: "安装"; action: "Install"; primary: true; }
+                    if !UiData.wsl-installed: WslActionButton { text: "安装并保护"; action: "Install"; primary: true; }
                     if UiData.wsl-installed: WslActionButton { text: "连接"; action: "Start"; primary: true; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
                     if UiData.wsl-installed: WslActionButton { text: "断开"; action: "Stop"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
                     WslActionButton { text: "状态"; action: "Status"; mode: "preview"; }
                     WslActionButton { text: "测试"; action: "Test"; mode: "preview"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
                     WslActionButton { text: "预检"; action: "Install"; mode: "preview"; }
-                    ActionButton { text: root.logs-open ? "收起日志" : "日志"; clicked => { root.logs-open = !root.logs-open; } }
+                    ActionButton { text: root.advanced-open ? "收起" : "高级"; clicked => { root.advanced-open = !root.advanced-open; } }
                 }
-                HorizontalLayout {
+                if root.advanced-open: VerticalLayout {
                     spacing: Theme.content-gap;
-                    if UiData.wsl-installed: WslActionButton { text: "断开并保留保护"; action: "Rollback"; mode: "execute"; }
-                    if UiData.wsl-installed: WslActionButton { text: "恢复原网络"; action: "Rollback"; mode: "restore-confirm"; danger: true; }
-                }
-                if UiData.wsl-admin-command != "": Paragraph { text: UiData.wsl-admin-command; font-size: Theme.detail-size; color: Theme.secondary; }
-            }
-            if !UiData.wsl-installed: ContentPanel {
-                Heading { text: "安装"; }
-                HorizontalLayout {
-                    cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Caption { text: "后端"; horizontal-stretch: 1; }
-                    ActionButton {
-                        text: "WireGuard";
-                        selected: UiData.wsl-backend == "WireGuard";
-                        enabled: !UiData.wsl-installed && UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting;
-                        clicked => { UiActions.dispatch(Intent.wsl-input, "backend", "WireGuard"); }
+                    HorizontalLayout {
+                        spacing: Theme.content-gap;
+                        if UiData.wsl-installed: WslActionButton { text: "保留保护断开"; action: "Rollback"; mode: "execute"; }
+                        if UiData.wsl-installed: WslActionButton { text: "恢复原网络"; action: "Rollback"; mode: "restore-confirm"; danger: true; }
+                        ActionButton { text: root.logs-open ? "收起日志" : "日志"; clicked => { root.logs-open = !root.logs-open; } }
                     }
-                }
-                HorizontalLayout {
-                    spacing: Theme.content-gap;
-                    WslField { text <=> UiData.wsl-distro; argument: "distro"; placeholder: "管理发行版"; }
-                    WslField { text <=> UiData.wsl-endpoint-ipv4; argument: "endpoint-ipv4"; placeholder: "VPS IPv4"; }
-                    WslField { width: 88px; horizontal-stretch: 0; text <=> UiData.wsl-endpoint-port; argument: "endpoint-port"; placeholder: "端口"; }
-                }
-                HorizontalLayout {
-                    spacing: Theme.content-gap;
-                    WslField { text <=> UiData.wsl-profile-path; argument: "profile-path"; placeholder: "私密配置 JSON"; }
-                    WslActionButton { text: "浏览…"; action: "ChooseProfile"; mode: "preview"; }
+                    if !UiData.wsl-installed: HorizontalLayout {
+                        cross-axis-alignment: center;
+                        spacing: Theme.content-gap;
+                        Caption { text: "WireGuard"; horizontal-stretch: 1; color: Theme.secondary; }
+                        WslField { text <=> UiData.wsl-distro; argument: "distro"; placeholder: "管理发行版"; }
+                        WslField { text <=> UiData.wsl-endpoint-ipv4; argument: "endpoint-ipv4"; placeholder: "VPS IPv4"; }
+                        WslField { width: 88px; horizontal-stretch: 0; text <=> UiData.wsl-endpoint-port; argument: "endpoint-port"; placeholder: "端口"; }
+                    }
+                    if !UiData.wsl-installed: HorizontalLayout {
+                        spacing: Theme.content-gap;
+                        WslField { text <=> UiData.wsl-profile-path; argument: "profile-path"; placeholder: "私密配置 JSON"; }
+                        WslActionButton { text: "浏览…"; action: "ChooseProfile"; mode: "preview"; }
+                    }
+                    if UiData.wsl-admin-command != "": Paragraph { text: UiData.wsl-admin-command; font-size: Theme.detail-size; color: Theme.secondary; }
                 }
             }
             ContentPanel {
@@ -120,7 +112,8 @@ export component WslPage inherits PageSurface {
                     cross-axis-alignment: center;
                     spacing: Theme.content-gap;
                     Caption { text: distro.name; horizontal-stretch: 1; }
-                    Label { text: distro.state; horizontal-alignment: right; color: Theme.secondary; }
+                    Caption { text: distro.coverage; horizontal-stretch: 0; color: Theme.secondary; }
+                    Label { text: distro.state; width: 72px; horizontal-stretch: 0; horizontal-alignment: right; color: Theme.secondary; }
                 }
             }
             if root.logs-open: ContentPanel {

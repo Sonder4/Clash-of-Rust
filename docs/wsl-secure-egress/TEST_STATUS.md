@@ -881,3 +881,9 @@ coverage until the full elevated transaction runs. Current live state remains:
 | Full administrator transaction | `NOT_RUN` |
 | VPS source address and provider requests | `NOT_RUN` |
 | Chrome, Codex CLI, Claude Code CLI and Claude Desktop | `NOT_RUN` |
+
+The WSL page was compacted in this change: transport, exit and protection stay
+visible, while endpoint/profile inputs, logs and recovery actions are under
+**高级**. The native pointer regression was rerun after this layout change;
+its result is recorded in the commit validation rather than inferred from an
+earlier build.
