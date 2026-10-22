@@ -602,3 +602,106 @@ acceptance confirms the VPS source address, tunnel DNS, and IPv6 policy.
 
 The Claude user service remains disabled as a fail-safe; its original unit
 backup is preserved in the root-only WSL backup directory above.
+
+## 2026-10-23 diagnostic checkpoint and offline verification (current session)
+
+This entry records only commands actually executed in this session. The live
+tunnel remained down throughout; nothing below proves end-to-end WSL egress.
+The corrected diagnosis is in `DIAGNOSIS_2026-10-23.md`.
+
+### Git checkpoint
+
+| Operation | Result | Evidence |
+| --- | --- | --- |
+| Commit A: product changes | PASS | `095567c`, 3 files, 229 insertions, 10 deletions |
+| Commit B: review document | PASS | `9de3edd`, `CODE_REVIEW_2026-10-22.md`, 240 lines |
+| Whitespace check before each commit | PASS | `git diff --check` |
+| Generated artifacts staged | NONE | No `dist/`, `target/` or `node_modules/` |
+
+Off-repo runtime snapshot saved to
+`%LOCALAPPDATA%\Temp\wsl-diag-snapshot-20261023\` (nft rulesets for three
+namespaces, `wg show`, Hyper-V rules for both stores, Windows routes, journal
+files). Not committed; contains operational state.
+
+### Critical address baseline
+
+| Address | Result | Time |
+| --- | --- | --- |
+| `https://ipgw.neu.edu.cn/` | HTTP 302, 0.025 s | 2026-10-23 00:47:29 |
+| `https://api.okinto.com/` | HTTP 200, 0.908 s | 2026-10-23 00:47:29 |
+
+### Offline checks executed
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| `linux_static_test.py` | PASS, 84 tests, 2 skipped | Portable gate logic; no kernel operations |
+| `acceptance_harness_unit.py` | PASS, 3 tests | Offline harness |
+| `server_unit.py` | PASS, 24 tests | Offline VPS profile validation |
+| `provision_unit.py` | PASS, 26 tests | Offline mocked host boundaries |
+| `payload_unit.py` | PASS, 32 tests, 16 skipped | Sandbox payload validation |
+| `python3 -m compileall` | PASS | Syntax only |
+| Shell entry syntax (`sh -n`) | PASS, 3 files | `manager`, `secure-egress`, `cor-egress-manager` |
+| `windows-unit.ps1` | PASS, 165 assertions | Mocked; `network_tests=NOT_RUN`, `wsl_started=false`, `firewall_modified=false` |
+| `elevation-unit.ps1` | PASS, 21 assertions | Offline; `uac=NOT_RUN` |
+| `windows-workflow.ps1` | PASS, 248 assertions | Offline; `firewall_modified=false`, `scheduled_tasks_modified=false` |
+| `package-upgrade-unit.ps1` | PASS, 53 assertions | Offline; `services_modified=false` |
+| `cargo build --workspace --locked --offline` | PASS, 0 errors | 1 pre-existing linker warning (not an error) |
+| `cargo test -p clash-client-core wsl::tests` | PASS, 27 passed, 136 filtered out | Endpoint-only Install/Start requires a profile |
+| `cargo fmt --all -- --check` | PASS | Local Rust workspace |
+| `cargo clippy -p clash-client-core --all-targets -- -D warnings` | PASS | No issues |
+
+### Isolated Linux data-plane verification
+
+`CI=true COR_EGRESS_ISOLATED_CI=1 python3
+scripts/wsl-secure-egress/tests/linux_integration.py --execute-isolated`:
+
+| Case group | Result |
+| --- | --- |
+| Overall | PASS, 86 cases, all PASS |
+| `kernel-rules-closed` / `-open-single` / `-open-multiple-bridge` | PASS |
+| `managed-tcp` / `managed-udp` / `managed-dns-tcp` / `managed-dns-udp` | PASS, receipt `source=10.77.0.2` |
+| `install-blocks-existing-tcp`, `installed-*` deny cases | PASS, `received=0` |
+| `attestation-*` (expired, future, generation, unmanaged distro, effective audit, permissions) | PASS |
+| `bwrap-permissions-and-mounts` / `bwrap-host-stdio-refused` | PASS, capabilities 0, noNewPrivs |
+| `stop-blocks-*`, `missing-tunnel-*`, `stopped-*` | PASS, `received=0` |
+| `restart-managed-tcp` / `restart-managed-udp` | PASS, tunnel receipt |
+| `post-rollback-*` (tcp, udp, ipv6, dns) | PASS |
+| Scope declared by the suite | `disposable Linux netns only; not WSL/Windows/real VPS acceptance` |
+
+Dependencies verified present before the run: `unshare`, `mount`, `ip`, `nft`,
+`wg`, `bwrap`, `setpriv`, `sysctl`.
+
+**This run overturns an earlier hypothesis.** The isolated fixture uses the same
+`manager.py start()` path, the same create-in-transport-then-move-to-gateway
+namespace layout, and the same absence of an `fwmark`, yet its tunnel passes.
+Missing `fwmark` is therefore not the cause of the production outage. See
+`DIAGNOSIS_2026-10-23.md` §3.
+
+### Not executed
+
+| Check | Status | Required environment |
+| --- | --- | --- |
+| `live_acceptance.py --execute` | BLOCKED | Requires a running phase with the endpoint enabled; the journal is `blocked` |
+| `fail-closed` acceptance | NOT_RUN | Closes the endpoint; separate authorization |
+| Windows-side packet capture to locate the exact drop | NOT_RUN | `pktmon` and similar change system state |
+| Cold boot, reboot, sleep/resume, network switch | NOT_RUN | Disposable WSL/Hyper-V environment |
+| Actual German IPv4 exit and receiver-source evidence | NOT_RUN | Authorized VPS and controlled receiver |
+| Docker functional protected egress | NOT_SUPPORTED | Independent adapter not implemented |
+| Ubuntu-26.04 runtime acceptance | NOT_RUN | Only Ubuntu-22.04 was exercised |
+
+### System change made this session
+
+| Change | State | Rollback |
+| --- | --- | --- |
+| `ClashOfRust-WslEgress-Endpoint` Hyper-V rule enabled in both stores | Applied; did not restore the tunnel | Set `Enabled=False` again; scope unchanged (UDP 51820 to the journaled endpoint only) |
+
+All other diagnostics were read-only. No Clash/Mihomo restart, no `.wslconfig`
+change, no Hyper-V default-policy change, no WSL restart, no firewall rule
+deletion, and no Claude/Anthropic access.
+
+### Status statement
+
+Static, offline and isolated data-plane checks pass. The live WSL tunnel remains
+down with the endpoint disabled and fail-closed in force. The drop point is
+narrowed to the Windows side of the WSL boundary but is not located. No
+end-to-end WSL egress, exit location or zero-leak claim is made.
