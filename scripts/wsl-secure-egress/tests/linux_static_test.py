@@ -7,6 +7,7 @@ These tests validate gating and evidence handling, not real firewall behavior.
 """
 
 import contextlib
+import configparser
 import errno
 import importlib.util
 import io
@@ -109,6 +110,24 @@ class CrossDistroGuardTests(unittest.TestCase):
         if argv == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2']:
             return subprocess.CompletedProcess(
                 argv, 0, stdout=json.dumps([{'dev': 'eth0'}]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2',
+                    'from', manager.TRANSPORT_IP, 'iif', manager.ROOT_IF]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([{'dev': 'eth0'}]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-N', '-j', 'route', 'show',
+                    'table', str(manager.ROUTE_TABLE)]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'dst': 'default', 'dev': manager.BUS_IF,
+                     'gateway': manager.BUS_GW_IP},
+                    {'dst': 'default', 'type': 'unreachable'},
+                ]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-j', 'rule', 'show']:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'priority': manager.PREF_DEFAULT_DENY,
+                     'table': manager.ROUTE_TABLE},
+                ]).encode(), stderr=b'')
         if argv == ['ip', '-4', '-j', 'route', 'show'] and ns == manager.TRANSPORT:
             return subprocess.CompletedProcess(
                 argv, 0, stdout=json.dumps([
@@ -163,8 +182,12 @@ class CrossDistroGuardTests(unittest.TestCase):
     def boot(self):
         (self.state_path / 'state.json').write_bytes(manager.encode(self.journal))
         with patch.object(manager, 'STATE', self.state_path), \
-                patch.object(manager, 'private_path', side_effect=lambda path: Path(path)), \
+                patch.object(manager, 'private_path',
+                             side_effect=lambda path, directory=False: Path(path)), \
                 patch.object(manager, 'command', side_effect=self.kernel), \
+                patch.object(manager.os, 'readlink', return_value='fixture-namespace'), \
+                patch.object(manager, 'boot_id', return_value='fixture-boot'), \
+                patch.object(manager.Manager, 'save'), \
                 patch.object(manager, 'read_profile', side_effect=AssertionError('manager private profile read')):
             return manager.Manager(manager.parse(['guard'])).boot_guard()
 
@@ -248,7 +271,7 @@ class CrossDistroGuardTests(unittest.TestCase):
     def test_sibling_boot_rejects_open_table_without_live_runtime(self):
         self.tables[manager.TABLE] = manager_table_fixture(
             'manager-owner', True, self.runtime, self.policy)
-        with patch.object(manager, 'shared_manager_runtime_matches', return_value=False) as runtime:
+        with patch.object(manager, 'shared_root_runtime_matches', return_value=False) as runtime:
             self.assertEqual(self.boot()['outcome'], 'blocked')
         runtime.assert_called_once_with(self.policy, 'eth0')
         self.assertEqual(self.writes, [manager.boot_emergency_rules().encode()])
@@ -484,6 +507,74 @@ class GateTests(unittest.TestCase):
             with self.assertRaisesRegex(manager.Blocked, 'manager operation remained active'):
                 manager.acquire_manager_lock(lock)
 
+    def test_start_refuses_existing_boot_emergency_before_opening(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'phase': 'Guarded'}
+        instance.load = Mock()
+        instance.assert_table = Mock()
+        with patch.object(manager, 'list_table',
+                          return_value={'nftables': []}):
+            with self.assertRaisesRegex(
+                    manager.Blocked, 'Existing boot emergency table preserved'):
+                instance.start()
+        instance.load.assert_called_once_with()
+        instance.assert_table.assert_not_called()
+
+    def test_sysctl_forward_journals_and_restores_gateway_ip_forward(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {
+            'uplink': 'eth0',
+            'forward_sources': [],
+            'sysctls': [],
+        }
+        instance.save = Mock()
+        phase = {'value': 'enable'}
+        writes = []
+
+        def fake_command(argv, ns=None, data=None, okay=False, **kwargs):
+            if argv[0] == 'cat':
+                value = '0' if phase['value'] == 'enable' else '1'
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=(value + '\n').encode(), stderr=b'')
+            if argv[0] == 'tee':
+                writes.append((argv[-1], ns, data))
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=b'', stderr=b'')
+            self.fail('Unexpected sysctl command: ' + repr((argv, ns, data)))
+
+        def fake_json_command(argv, ns=None, **kwargs):
+            self.assertEqual(argv[:4], ['ip', '-j', 'link', 'show'])
+            return [{'ifname': argv[-1], 'ifindex': 100}]
+
+        with patch.object(manager, 'command', side_effect=fake_command), \
+                patch.object(manager, 'json_command',
+                             side_effect=fake_json_command):
+            instance.sysctl_forward(True)
+
+            global_records = [
+                rec for rec in instance.s['sysctls']
+                if rec.get('scope') == 'namespace'
+            ]
+            self.assertEqual(global_records, [{
+                'namespace': manager.GW,
+                'path': '/proc/sys/net/ipv4/ip_forward',
+                'before': '0',
+                'written': '1',
+                'scope': 'namespace',
+            }])
+            self.assertIn(
+                ('/proc/sys/net/ipv4/ip_forward', manager.GW, b'1\n'),
+                writes)
+
+            phase['value'] = 'disable'
+            instance.sysctl_forward(False)
+
+        self.assertIn(
+            ('/proc/sys/net/ipv4/ip_forward', manager.GW, b'0\n'),
+            writes)
+        self.assertNotIn('sysctls', instance.s)
+        self.assertGreaterEqual(instance.save.call_count, 2)
+
     def test_boot_guard_uses_fixed_installed_wrapper(self):
         self.assertEqual(manager.boot_guard_command(),
                          '/usr/local/lib/cor-egress/manager guard')
@@ -514,6 +605,8 @@ class GateTests(unittest.TestCase):
                     for call in instance.snapshot.call_args_list
                 }
                 wsl_conf = snapshots['wsl.conf'].decode()
+                parser = configparser.ConfigParser(interpolation=None, strict=True)
+                parser.read_string(wsl_conf)
                 self.assertIn('[network]', wsl_conf)
                 self.assertIn('generateResolvConf = false', wsl_conf)
                 self.assertIn('generateHosts = false', wsl_conf)
@@ -521,12 +614,45 @@ class GateTests(unittest.TestCase):
                 self.assertIn('enabled = false', wsl_conf)
                 self.assertIn('appendWindowsPath = false', wsl_conf)
                 self.assertIn('[boot]', wsl_conf)
-                self.assertIn('command = ' + manager.boot_guard_command(), wsl_conf)
+                self.assertEqual(parser.sections(), ['network', 'interop', 'boot'])
+                self.assertEqual(list(parser['boot']), ['command'])
+                self.assertEqual(parser['boot']['command'],
+                                 manager.boot_guard_command())
                 self.assertEqual(
                     snapshots['resolv.conf'],
                     b'nameserver 10.77.0.1\noptions timeout:2 attempts:1\n')
                 self.assertIn(b'127.0.1.1 fixture-wsl\n', snapshots['hosts'])
                 self.assertEqual(instance.snapshot.call_count, 3)
+
+    def test_distro_guard_refreshes_namespace_and_boot_identity(self):
+        instance = object.__new__(manager.Manager)
+        instance.args = manager.parse(['guard'])
+        instance.s = {
+            'role': 'distro-config',
+            'phase': 'DistroConfigured',
+            'generation': 72,
+            'root_namespace': 'stale-namespace',
+            'boot_id': 'stale-boot',
+        }
+        instance.p = None
+        instance.checks = []
+        instance.save = Mock()
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'ensure_static_boot_guard',
+                             return_value='static'), \
+                patch.object(manager.os, 'readlink',
+                             return_value='fresh-namespace') as readlink, \
+                patch.object(manager, 'boot_id',
+                             return_value='fresh-boot') as current_boot:
+            result = instance.boot_guard()
+
+        self.assertEqual(result['outcome'], 'succeeded')
+        self.assertEqual(instance.s['root_namespace'], 'fresh-namespace')
+        self.assertEqual(instance.s['boot_id'], 'fresh-boot')
+        self.assertEqual(instance.s['phase'], 'DistroConfigured')
+        readlink.assert_called_once_with('/proc/self/ns/net')
+        current_boot.assert_called_once_with()
+        instance.save.assert_called_once_with()
 
     def test_existing_emergency_table_blocks_both_boot_paths(self):
         for role in ('manager', 'distro-config'):
@@ -693,8 +819,11 @@ class GateTests(unittest.TestCase):
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.load = Mock(side_effect=AssertionError('private profile read'))
         instance.event = Mock(return_value={'outcome': 'succeeded'})
+        instance.save = Mock()
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                patch.object(manager.os, 'readlink', return_value='fixture-namespace'), \
+                patch.object(manager, 'boot_id', return_value='fixture-boot'), \
                 patch.object(manager, 'command') as command:
             instance.boot_guard()
         instance.load.assert_not_called()
@@ -704,8 +833,11 @@ class GateTests(unittest.TestCase):
         instance = object.__new__(manager.Manager)
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.event = Mock(return_value={'outcome': 'succeeded'})
+        instance.save = Mock()
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                patch.object(manager.os, 'readlink', return_value='fixture-namespace'), \
+                patch.object(manager, 'boot_id', return_value='fixture-boot'), \
                 patch.object(manager, 'command') as command:
             instance.boot_guard()
         command.assert_not_called()
@@ -757,8 +889,11 @@ class GateTests(unittest.TestCase):
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.load = Mock(side_effect=AssertionError('private profile read'))
         instance.event = Mock(return_value={'outcome': 'succeeded'})
+        instance.save = Mock()
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='manager'), \
+                patch.object(manager.os, 'readlink', return_value='fixture-namespace'), \
+                patch.object(manager, 'boot_id', return_value='fixture-boot'), \
                 patch.object(manager, 'ensure_boot_emergency_deny') as emergency:
             instance.boot_guard()
         instance.load.assert_not_called()
