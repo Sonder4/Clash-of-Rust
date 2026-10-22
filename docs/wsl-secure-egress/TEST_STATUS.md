@@ -6,6 +6,49 @@ actual run; never convert an unavailable or timed-out check into PASS.
 Earlier dated runs are historical evidence for their own revision and payload.
 They do not describe the current host state.
 
+## 2026-10-22 shared-guard repair
+
+Two nftables/iproute2 JSON serialization differences between Ubuntu 22.04
+(nft 1.0.2, iproute2 5.15) and Ubuntu 26.04 (nft 1.1.6, iproute2 6.19) made the
+sibling distro-config boot hook misclassify the manager's shared guard as
+`unknown`. It then installed the global `cor_egress_boot_emergency` drop table on
+every launch, which closed egress for the entire WSL VM including the manager.
+
+| Difference | 22.04 output | 26.04 output |
+| --- | --- | --- |
+| unreachable default route `type` | `"unreachable"` | `"7"` (RTN_UNREACHABLE) |
+| ICMP code `frag-needed` | `"frag-needed"` | `4` |
+
+Root cause: the ownership proofs compared only the string forms, so the
+`shared_root_runtime_matches` and `manager_table_matches` paths could never
+succeed for a 26.04 sibling.
+
+Fixes (`f0e0cd9`, `434367d`):
+
+- `unreachable_default()` accepts both forms; used by the root and gateway
+  namespace proofs.
+- `normalize_rule_values()` maps ICMP code names to their numeric form for rule
+  comparison only. Table hashing still uses the unmodified output, and unrelated
+  integers keep their meaning.
+
+Regression coverage: `linux_static_test.py` now runs 92 tests (was 87), adding
+numeric route-type acceptance for both namespaces and ICMP code normalization.
+
+Additional blocker found while deploying: a stale
+`/usr/local/lib/cor-egress/__pycache__` directory made the reviewed payload
+upgrade refuse with "Unexpected installed entries". The installer validates that
+the destination contains exactly the four payload files plus the receipt. No
+`__pycache__` remains in either distro after this repair.
+
+Verified after the repair:
+
+- Both distros classify the shared guard as `manager`; only
+  `cor_egress_guard` exists in the ruleset.
+- Terminating and relaunching Ubuntu-26.04 no longer installs the emergency
+  table and does not break the running tunnel.
+- Both distros egress `62.84.164.122` with IPv6 refused.
+- `https://ipgw.neu.edu.cn/` 302 and `https://api.okinto.com/` 200 throughout.
+
 ## Current snapshot, 2026-10-22
 
 | Item | Current read-only evidence |
@@ -20,18 +63,21 @@ They do not describe the current host state.
 | Hyper-V WSL policy | Default inbound and outbound Block |
 | Endpoint exception | `ClashOfRust-WslEgress-Endpoint`, `Enabled=False` |
 | Windows profile | **MISSING**; a root-only Linux copy exists in Ubuntu-22.04 |
-| Broker state | `failed_closed_requested` |
+| Broker state | `blocked`; `endpoint_enabled=false`, endpoint rule `Enabled=False` |
 | Guardian service | Running / Automatic; this is not tunnel evidence |
-| Ubuntu 22.04 | Running; plain NAT `eth0`; DNS and `curl` fail |
-| Ubuntu 26.04 | Installed under `F:\WSL`, WSL2, currently stopped |
-| Chrome / Codex CLI / Claude Code CLI / Claude Desktop | `NOT_RUN` on the current host |
-| Current VPS source and provider connections | `NOT_RUN` |
+| Ubuntu 22.04 | Running; guard adopted; egress proven `62.84.164.122` while the tunnel was open |
+| Ubuntu 26.04 | Installed under `F:\WSL`, WSL2, running; egress proven `62.84.164.122` while the tunnel was open |
+| Chrome / Codex CLI / Claude Code CLI / Claude Desktop | Installed in Ubuntu-26.04: Chrome `156.0.8078.47`, Claude Code CLI `2.1.302`, Codex CLI `0.163.0`, claude-desktop `3.1623.4`. Launch and login `NOT_RUN` |
+| Current VPS source and provider connections | TLS reachable through the tunnel: `api.anthropic.com` 404, `api.openai.com` 421, `api.deepseek.com` 401. Login and model calls `NOT_RUN` |
 | Strict-launcher visibility and interop checks | Plain-shell evidence only; strict live check `NOT_RUN` |
 | UAC transaction | `NOT_RUN` for the current repair |
-| Stop/Start, cold boot, reboot, network switch | `NOT_RUN` |
+| Stop/Start, cold boot, reboot, network switch | Stop and Start both ran elevated and succeeded; cold boot, host reboot and network switch `NOT_RUN` |
+| Host restart of the WSL VM | `NOT_RUN`; a 26.04 terminate/relaunch did not disturb the running tunnel |
 
-The current fail-closed state takes precedence over the historical
-2026-10-18 tunnel results below.
+The endpoint rule is currently disabled, so the fail-closed state takes
+precedence. An already-established UDP session can keep working after the rule
+is disabled; that residual traffic is not tunnel evidence and was not treated
+as acceptance.
 
 ### 2026-10-22 final development-tree verification
 

@@ -28,6 +28,22 @@ preserves both exit statuses.
 - Google Chrome and the native `claude-desktop` package from their signed APT
   repositories.
 
+## Ubuntu 26.04 specifics
+
+This distribution targets 26.04 only; the package list uses the 64-bit time_t
+names it actually publishes (`libatk1.0-0t64`, `libatk-bridge2.0-0t64`,
+`libcups2t64`, `libasound2t64`, `libgtk-3-0t64`). Running it on an older release
+requires those names, not a compatibility shim.
+
+NodeSource publishes 22.23.4 as the newest 22.x line, so the install pins
+`nodejs=22.23.3-1nodesource1` explicitly; an unpinned install drifts and fails
+the version check.
+
+Claude Desktop's signing key lives at
+`https://downloads.claude.ai/claude-desktop/key.asc` and is already
+ASCII-armored. Do not dearmor it: apt rejects an armored key that was converted
+to binary as an unsupported keyring filetype.
+
 These version strings are defaults and can be overridden explicitly for a
 reviewed upgrade. The installer verifies the Node, Claude and Codex version
 output before it reports success.
@@ -61,13 +77,23 @@ distribution or version rather than modifying system glibc.
 
 ## Current status
 
-An earlier installer was refused before any package mutation because the
-fail-closed egress check could not prove the VPS address. On the current host,
-Chrome, Codex CLI, Claude Code CLI and Claude Desktop are not verified as
-installed or working. Actual installation, version readback, provider
-connections and the strict launch check remain `NOT_RUN`.
+Installed on 2026-10-22 inside Ubuntu 26.04 through the VPS egress, with
+`EXPECTED_EGRESS_IPV4` matching the live probe:
 
-The offline tool-installer regression passed 8 tests. It checks the unique
+- Google Chrome `156.0.8078.47`
+- Node.js `v22.23.3`, npm `10.9.9`
+- Claude Code CLI `2.1.302`
+- Codex CLI `0.163.0`
+- claude-desktop `3.1623.4` (native APT package)
+
+The installer is idempotent: a second run reports each component as already
+present and re-verifies the reported versions.
+
+Not verified: launching Chrome or Claude Desktop under a real display, and any
+provider login. The exit was proven German (Frankfurt am Main, `DE`) on the same
+path before installation, but application behaviour was not exercised.
+
+The offline tool-installer regression passed 9 tests. It checks the unique
 authoritative implementation, proxy clearing, the VPS gate before every
 package action, fixed versions, the absence of legacy proxy/DNS logic, the
 absolute wrapper path, argument forwarding and exit-code 20 propagation. These
