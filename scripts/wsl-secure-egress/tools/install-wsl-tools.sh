@@ -44,9 +44,10 @@ install_base_packages() {
     apt-get install -y -qq --no-install-recommends \
         ca-certificates curl wget gnupg apt-transport-https \
         software-properties-common xdg-utils desktop-file-utils \
-        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+        libnss3 libnspr4 libdrm2 \
         libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-        libgbm1 libasound2 libpangocairo-1.0-0 libgtk-3-0 libxss1
+        libgbm1 libpangocairo-1.0-0 libxss1 \
+        libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libasound2t64 libgtk-3-0t64
 }
 
 install_node() {
@@ -68,7 +69,7 @@ Architectures: amd64
 Signed-By: /usr/share/keyrings/nodesource.gpg
 EOF
     apt-get update -qq
-    apt-get install -y -qq nodejs
+    apt-get install -y -qq "nodejs=${NODE_VERSION#v}-1nodesource1"
     if [ "$(node --version 2>/dev/null || true)" != "${NODE_VERSION}" ]; then
         log "NodeSource did not provide the requested ${NODE_VERSION}; refusing to continue"
         printf 'expected Node: %s\n' "${NODE_VERSION}" >&2
@@ -83,8 +84,12 @@ install_chrome() {
         return 0
     fi
     log 'installing Google Chrome'
-    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | \
-        gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+    # Download first: piping curl straight into gpg --dearmor blocks here
+    # because gpg waits for the terminal rather than stdin.
+    key="$(mktemp)"
+    curl -4 -fsSL --max-time 60 -o "$key" https://dl.google.com/linux/linux_signing_key.pub
+    gpg --dearmor < "$key" > /usr/share/keyrings/google-chrome.gpg
+    rm -f "$key"
     chmod 0644 /usr/share/keyrings/google-chrome.gpg
     cat > /etc/apt/sources.list.d/google-chrome.list <<EOF
 deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main
@@ -99,7 +104,9 @@ install_claude_desktop() {
         return 0
     fi
     log 'installing Claude Desktop'
-    curl -fsSL https://downloads.claude.ai/claude-desktop/apt/stable/archive-keyring.asc \
+    # The published key is already ASCII-armored; dearmoring it makes apt
+    # reject the keyring as an unsupported filetype.
+    curl -4 -fsSL --max-time 60 https://downloads.claude.ai/claude-desktop/key.asc \
         -o /usr/share/keyrings/claude-desktop-archive-keyring.asc
     chmod 0644 /usr/share/keyrings/claude-desktop-archive-keyring.asc
     cat > /etc/apt/sources.list.d/claude-desktop.list <<EOF
@@ -136,7 +143,9 @@ report() {
     printf 'npm            %s\n' "$(npm --version 2>/dev/null || echo missing)"
     printf 'google-chrome  %s\n' "$(google-chrome --version 2>/dev/null || echo missing)"
     printf 'claude         %s\n' "$(claude --version 2>/dev/null | head -1 || echo missing)"
-    printf 'claude-desktop %s\n' "$(claude-desktop --version 2>/dev/null | head -1 || echo 'installed')"
+    # claude-desktop is a GUI binary and traps without a display; read the
+    # package version instead of executing it.
+    printf 'claude-desktop %s\n' "$(dpkg-query -W -f='${Version}' claude-desktop 2>/dev/null || echo missing)"
     printf 'codex          %s\n' "$(codex --version 2>/dev/null || echo missing)"
 }
 
