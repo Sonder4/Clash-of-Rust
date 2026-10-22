@@ -481,6 +481,22 @@ class SharedRootRuntimeTests(unittest.TestCase):
         self.assertFalse(manager.unreachable_default({'dst': '192.0.2.0/24',
                                                       'type': '7'}))
 
+    def test_icmp_code_normalization_treats_name_and_number_alike(self):
+        # nftables 1.1.x emits frag-needed as 4; 1.0.x keeps the name.
+        named = [{'match': {'op': '==', 'left': {'payload': {'protocol': 'icmp',
+                                                             'field': 'code'}},
+                            'right': 'frag-needed'}}]
+        numeric = [{'match': {'op': '==', 'left': {'payload': {'protocol': 'icmp',
+                                                              'field': 'code'}},
+                              'right': 4}}]
+        self.assertEqual(manager.normalize_rule_values(named),
+                         manager.normalize_rule_values(numeric))
+
+    def test_icmp_normalization_leaves_unrelated_values(self):
+        self.assertEqual(manager.normalize_rule_values({'right': 53}), {'right': 53})
+        self.assertEqual(manager.normalize_rule_values({'right': 'destination-unreachable'}),
+                         {'right': 'destination-unreachable'})
+
     def test_numeric_unreachable_type_in_gateway_namespace(self):
         # shared_manager_runtime_matches also inspects the gateway namespace's
         # IPv6 default route; the same version skew applies there.

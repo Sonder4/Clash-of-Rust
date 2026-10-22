@@ -387,6 +387,27 @@ def canonical_rule(expr):
     return json.loads(json.dumps(clean_nft(expr), sort_keys=True))
 
 
+# nftables 1.1.x serializes ICMP code names as their numeric values in JSON
+# output, while 1.0.x keeps the name. Ownership checks must treat both forms
+# as the same rule; hashing still uses the unmodified table.
+ICMP_CODE_NAMES = {'frag-needed': 4}
+
+
+def normalize_rule_values(expr):
+    """Map ICMP code names to their numeric form for ownership comparison.
+
+    Only names are rewritten: a bare integer elsewhere in a rule (a port, for
+    example) must keep its meaning, so the mapping is never applied in reverse.
+    """
+    if isinstance(expr, list):
+        return [normalize_rule_values(x) for x in expr]
+    if isinstance(expr, dict):
+        return {key: normalize_rule_values(value) for key, value in expr.items()}
+    if isinstance(expr, str):
+        return ICMP_CODE_NAMES.get(expr, expr)
+    return expr
+
+
 def static_boot_rules():
     return f'''table inet {TABLE} {{
       comment "{STATIC_BOOT_COMMENT}"
@@ -662,9 +683,11 @@ def manager_table_matches(owner, opened=False, state=None, profile=None):
                 name, expression = rule.pop('chain'), rule.pop('expr')
                 if name not in expected or rule != {'family': 'inet', 'table': TABLE}:
                     return False
-                rules[name].append(expression)
+                rules[name].append(normalize_rule_values(expression))
             else:
                 return False
+        expected = {name: [normalize_rule_values(x) for x in exprs]
+                    for name, exprs in expected.items()}
         return set(chains) == set(expected) and rules == expected
     except (KeyError, TypeError, ValueError):
         return False
