@@ -663,3 +663,39 @@ request, Claude Code test, Claude Desktop test, cold boot, reboot, network
 switch, or restore/reinstall live acceptance was executed in this section.
 Those items remain `NOT_RUN` or `BLOCKED` until authoritative live evidence is
 captured.
+
+## 2026-10-22 upstream merge and ACL repair
+
+The following checks were executed after merging
+`upstream/main=2615ebc96f9f510802194727a6108bde73f4c8ed`, which contains
+the upstream 0.6.1 UI-motion and Claude protection-mode changes.
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| Upstream ancestry | PASS | `git merge-base --is-ancestor upstream/main HEAD`; `0 behind / 72 ahead` before this documentation commit |
+| Admin ACL SID regression | PASS, 9 assertions | `tests/admin-job-acl.ps1`; canonical `*SID` rules pass and the host is unchanged |
+| Desktop test binary after merge | PASS, 105 tests | `cargo test -p clash-of-rust --bin clash-of-rust --locked`; includes upstream motion and WSL UI dispatch tests |
+| Workspace all-targets check | PASS | `cargo check --workspace --all-targets --locked` |
+| Rust formatting | PASS | `cargo fmt --all -- --check` |
+| Clash of WSL component suite | PASS, 22 assertions | Static/parser/installer checks; live UAC remains `NOT_RUN` |
+| Windows broker unit suite | PASS, 166 assertions | Host, WSL and network boundaries mocked |
+| Windows workflow suite | PASS, 244 assertions | No WSL, firewall or task mutation |
+| Windows elevation suite | PASS, 21 assertions | UAC is `NOT_RUN` |
+| Package-upgrade suite | PASS, 53 assertions | Installed services unchanged |
+| Linux static/boot-guard suite | PASS, 87 tests | Real Ubuntu-22.04 invocation; no live host change |
+| VPS server validation | PASS, 24 tests | Offline profile validation |
+| Payload upgrade suite | PASS, 32 tests, 16 skipped | Ubuntu-22.04 invocation; root/native cases were skipped |
+| Acceptance harness | PASS, 3 tests | Offline endpoint validation |
+| VPS provisioning suite | PASS, 27 tests | Offline mocked host boundaries |
+
+An intermediate commit created during merge preparation did not contain the
+upstream commit as a parent. It was discarded before the final merge. The
+final merge commit was then checked with `git merge-base --is-ancestor`; the
+earlier compile and test checks are not used as proof of upstream ancestry.
+
+The WireGuard client profile is still absent from its Windows target path.
+A root-only copy is present at
+`Ubuntu-22.04:/etc/cor-egress/profile.json` and matches the Linux manager
+journal. It has not yet been copied to Windows because that write requires
+protected ACL setup and UAC. No tunnel, provider request or model-client live
+test occurred in this section.
