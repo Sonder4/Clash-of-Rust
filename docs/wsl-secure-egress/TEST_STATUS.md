@@ -812,3 +812,68 @@ TCP 22 虽可连通但握手被关闭；改用 IPv4 + 同一密钥可正常登�
 Ubuntu-22.04 已端到端打通：WSL 流量经 Clash of Rust 直连规则出到 VPS 德国 IPv4，
 DNS 经隧道解析，guard 的 fail-closed 语义保持。**这只是单发行版、单路径的实测结果，
 不构成「任何时候、任何网络零泄漏」的结论。** Ubuntu-26.04 尚未连通。
+
+---
+
+## 2026-10-23 追加：`Guarded` 是常态，`Running` 需每次启动后重建
+
+本节修正上一节"Ubuntu-22.04 已端到端打通"的表述。那一次通过是真实的，但它不是一个
+持久状态；大约 30 分钟后同一条路径失效，复测发现丢包点，并定位到机制性原因。
+
+### 失效时的测量
+
+| 测量 | 结果 |
+| --- | --- |
+| WSL 内 `wg0` transfer | 两次采样完全相同，不再增长 |
+| transport 命名空间 `cor-ut0` 抓包 | keepalive 每 5 秒正常发出（148 B） |
+| 根命名空间 `cor-et0` 抓包 | 同样的包到达（3 包 / 12 秒） |
+| 根命名空间 `eth0` 抓包 | **0 包** |
+| 根命名空间 `conntrack` | 无任何到 62.84.164.122 的 UDP 条目 |
+| Windows vNIC（`vEthernet (WSL …)`） | 收发 delta 均为 +0 |
+| VPS 侧 `cor-wsl0` | received 不变，handshake 24 分钟前 |
+| 根命名空间 nft `forward` 链 | `policy drop`，**无任何 accept 规则**，计数器 10 秒 +2 包 |
+
+丢包点因此精确定位在**根命名空间 `cor-et0` → `eth0` 的转发路径**，且是 nftables
+`forward` 链主动丢弃，不是路由错误：`ip route get 62.84.164.122 from 169.254.240.2
+iif cor-et0` 正确解析为 `via 172.19.96.1 dev eth0`。
+
+### 机制原因
+
+`manager.py` 的根命名空间 guard 表有两种形状：
+
+- `root_rules()`（`opened=False`）：forward 链只有 `policy drop`，**无 accept**；
+- `root_rules(opened=True)`：forward 链含
+  `iifname "cor-et0" oifname "<uplink>" ip saddr 169.254.240.2 ip daddr <endpoint>
+  udp sport 51821 udp dport 51820 accept`（约 1208 行），并配套 SNAT masquerade。
+
+`start()` 在约 1807 行写入 `opened=True` 后才把 phase 置为 `Running`。
+而 `boot_guard()`（约 1926 行，即 `/etc/wsl.conf` 的 `[boot] command`）在**每次
+WSL 启动时无条件**执行 `install_manager_after_boot_guard()`、`phase = 'Guarded'`，
+装回 `opened=False` 的 deny 表。
+
+`/var/lib/cor-egress/state.json` 显示 `phase: Guarded`，`previous_boots` 有 173 条
+且全部是 `Guarded`——**该 journal 从未达到 `Running`**。同时 `namespaces` 已建立、
+`sysctls` 已写 9 项，说明 30 分钟前那次 start 走到了命名空间与 sysctl，但 phase 未落
+`Running`，随后 guard 把表覆盖回 deny 形状。
+
+因此：
+
+- 上一节记录的"出口 62.84.164.122 / DNS 解析 / example.com 200"是**一次真实的瞬时测量**，
+  但它依赖 `opened=True` 表恰好还在，不是一个可持久复现的状态；
+- `Guarded` 是 WSL 每次启动后的**设计常态**，`Running` 需要 Windows 侧 attestation
+  通过后重新 start，且下一次 WSL 启动又会回到 `Guarded`；
+- 这不是本轮新引入的缺陷，而是"每次启动后必须重新 start"这一设计与
+  `boot_guard` 无条件回落之间的既定行为。本机 journal 的 `phase: blocked`
+  （Windows 侧）还会让 `Invoke-WslEgressScopeRenewal` 在函数开头直接返回，
+  不会自动续期。
+
+### 结论修正
+
+不得把上一节表述为"WSL 已端到端打通"。准确表述是：
+
+> 静态、离线与隔离数据面验证通过；直连规则已生效并被核心确认；曾有一次瞬时端到端
+> 测量通过（出口 VPS 德国 IPv4），但该状态不可持久，当前根命名空间 guard 处于
+> `Guarded`（deny）形状，WSL 出网再次中断。fail-closed 语义始终成立。
+
+要让出网稳定，需要的是让 `Running` 状态在每次 WSL 启动后可靠重建，或明确接受
+"每次启动后手动 start"。这属于设计决策，未擅自实施。
