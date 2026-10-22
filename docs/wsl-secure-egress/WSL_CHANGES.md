@@ -99,8 +99,8 @@ transaction and payload. It is not a current status claim. The synchronized
 installed payload was then exercised on Ubuntu-22.04 with a controlled
 Stop→Start transaction. Stop returned `succeeded/Guarded`; the first subsequent
 Start returned `succeeded/Running` and recreated both owned namespaces. Three
-historical IPv4 probes from the isolated launcher returned
-`62.84.164.122`. The isolated view contained only `lo`, `cor-bg0` and `wg0`,
+historical IPv4 probes from the isolated launcher returned the VPS IPv4
+recorded in the protected profile. The isolated view contained only `lo`, `cor-bg0` and `wg0`,
 used `nameserver 10.77.0.1`, and had an unreachable IPv6 default route. OpenAI,
 Anthropic and DeepSeek unauthenticated endpoint probes returned 401, 405 and
 401 respectively, proving reachability but not authentication or inference.

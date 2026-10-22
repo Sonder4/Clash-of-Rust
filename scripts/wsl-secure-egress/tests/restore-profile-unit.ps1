@@ -21,8 +21,10 @@ $text = Get-Content -LiteralPath $script -Raw
 Assert-True ($text -match 'ProcessStartInfo') 'Linux profile must be read by a Windows process.'
 Assert-True ($text -match 'RedirectStandardOutput = \$true') 'Profile transfer must use stdout, not argv.'
 Assert-True ($text -match 'StandardError\.ReadToEnd') 'Stderr must be drained.'
-Assert-True ($text -match '9DA000C7399DE02A675C18AE929356DDC5F6072ABA9169E4BE84A85519A397F7') `
-    'Expected profile hash must be fixed.'
+Assert-True ($text -notmatch '[0-9A-Fa-f]{64}') 'No deployment profile digest may be embedded.'
+Assert-True ($text -notmatch '\b(?:\d{1,3}\.){3}\d{1,3}\b') 'No deployment IPv4 address may be embedded.'
+Assert-True ($text -match "ExpectedSha256 -notmatch '\^\[0-9A-Fa-f\]\{64\}\$'") `
+    'The approved profile digest must be a mandatory caller input.'
 Assert-True ($text -match 'Assert-ProfileDocument') 'Profile schema validation must be present.'
 Assert-True ($text -match 'FromBase64String') 'WireGuard key lengths must be validated.'
 Assert-True ($text -match 'WriteAllBytes') 'Profile must use binary atomic staging.'
@@ -46,8 +48,8 @@ try {
     $random.Dispose()
 }
 $profileBytes = [Text.UTF8Encoding]::new($false).GetBytes(
-    '{"schema":1,"backend":"wireguard","endpoint_ipv4":"62.84.164.122",' +
-    '"endpoint_port":51820,"manager_distro":"Ubuntu-22.04",' +
+    '{"schema":1,"backend":"wireguard","endpoint_ipv4":"203.0.113.10",' +
+    '"endpoint_port":51820,"manager_distro":"Fixture-Manager",' +
     '"tunnel_address":"10.77.0.2/32","resolver_ipv4":"10.77.0.1",' +
     '"uid":1000,"gid":1000,' +
     ('"private_key":"' + [Convert]::ToBase64String($syntheticPrivateKey) + '",') +
@@ -84,16 +86,32 @@ try {
 $target = Join-Path ([IO.Path]::GetTempPath()) ('cor-profile-preview-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
     [IO.File]::WriteAllBytes($reader + '.source', $profileBytes)
-    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass `
-        -File $script -ProfilePath $target -ExpectedSha256 $profileHash `
-        -WslExecutable $reader 2>&1)
-    $exitCode = $LASTEXITCODE
-    $response = (($output | Out-String).Trim() | ConvertFrom-Json)
-    Assert-True ($exitCode -eq 0) 'Preview must exit successfully.'
-    Assert-True ([string]$response.outcome -eq 'not_run') 'Preview must report not_run.'
-    Assert-True ([bool]$response.hash_matches) 'Preview must validate the exact source hash.'
-    Assert-True ([bool]$response.schema_valid) 'Preview must validate the profile schema.'
+    function Invoke-Preview([string[]]$Extra) {
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File $script -ProfilePath $target -SourceDistro 'Fixture-Manager' `
+            -StatePath (Join-Path $fixtureRoot 'absent-state.json') `
+            -WslExecutable $reader @Extra 2>&1)
+        [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Response = (($output | Out-String).Trim() | ConvertFrom-Json)
+        }
+    }
+    $preview = Invoke-Preview @('-ExpectedSha256', $profileHash.ToLowerInvariant())
+    Assert-True ($preview.ExitCode -eq 0) 'Preview must exit successfully.'
+    Assert-True ([string]$preview.Response.outcome -eq 'not_run') 'Preview must report not_run.'
+    Assert-True ([bool]$preview.Response.hash_matches) 'Preview must validate the exact source hash.'
+    Assert-True ([bool]$preview.Response.schema_valid) 'Preview must validate the profile schema.'
     Assert-True (-not (Test-Path -LiteralPath $target)) 'Preview must not create the target profile.'
+
+    $missingHash = Invoke-Preview @()
+    Assert-True ($missingHash.ExitCode -ne 0 -and
+        [string]$missingHash.Response.outcome -eq 'failed') 'A missing approved digest must be refused.'
+
+    $wrongEndpoint = Invoke-Preview @('-ExpectedSha256', $profileHash,
+        '-ExpectedEndpointIpv4', '198.51.100.7')
+    Assert-True ($wrongEndpoint.ExitCode -ne 0 -and
+        [string]$wrongEndpoint.Response.outcome -eq 'failed') 'An unexpected endpoint must be refused.'
+    Assert-True (-not (Test-Path -LiteralPath $target)) 'Refused previews must not create the target profile.'
 } finally {
     Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue

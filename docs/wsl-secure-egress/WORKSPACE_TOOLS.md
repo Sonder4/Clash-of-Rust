@@ -13,10 +13,12 @@ Maintaining package versions or installation logic in both scripts is forbidden
 because the two copies can drift.
 
 The installer clears inherited proxy variables and makes no package change until
-`https://ifconfig.co/ip` returns the expected German VPS IPv4. The default is
-`62.84.164.122` and can be overridden with `EXPECTED_EGRESS_IPV4` for a
-separately reviewed VPS profile. A failed or unavailable probe exits with code
-20. The zero-argument compatibility wrapper preserves that exit status.
+`https://ifconfig.co/ip` returns the expected German VPS IPv4. The expected
+address is deployment data and is never stored in the repository: export
+`EXPECTED_EGRESS_IPV4` from the operator's own record before running the
+installer. A missing or malformed value exits with code 21; a failed or
+unavailable probe exits with code 20. The zero-argument compatibility wrapper
+preserves both exit statuses.
 
 ## Fixed versions
 

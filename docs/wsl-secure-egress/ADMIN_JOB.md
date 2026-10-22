@@ -2,22 +2,30 @@
 
 `scripts/wsl-secure-egress/COR-Full-AdminJob.ps1` 是 WSL Secure Egress 的一次性主机部署作业。它只负责管理员阶段的主机 ACL、受保护包升级、broker 启动和实机验收；WSL Linux 组件仍由 `WslSecureEgress.psm1` 与 `linux/manager.py` 管理。
 
-运行方式：
+运行方式（在工作树根目录、中完整性 PowerShell 中）：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File F:\Codex\Clash-of-Rust-work\scripts\wsl-secure-egress\COR-Full-AdminJob.ps1
+  -File .\scripts\wsl-secure-egress\COR-Full-AdminJob.ps1 `
+  -Repository (Get-Location).Path `
+  -ExpectedEgressIpv4 <VPS 公网 IPv4> `
+  -ExpectedProfileSha256 <受保护 profile 的 64 位十六进制摘要>
 ```
 
 必须直接运行当前评审工作树中的这个文件。不要把脚本复制到其他目录后运行：
 复制件不会随 Git 更新，旧副本可能继续使用已经修复的 ACL、staging 或恢复
-逻辑。作业日志中的诊断输出和作者修改时间不能替代工作树哈希检查。每次
-管理员执行前先确认正在提交的 head 和脚本哈希：
+逻辑。作业日志中的诊断输出和作者修改时间不能替代工作树哈希检查。
 
-```powershell
-git status --short --branch
-Get-FileHash scripts\wsl-secure-egress\COR-Full-AdminJob.ps1 -Algorithm SHA256
-```
+必填私有输入：
+
+- `-ExpectedEgressIpv4`：VPS 公网 IPv4，用于 profile 端点和严格启动器出口
+  断言。脚本内不保存该地址。
+- `-ExpectedProfileSha256`：受保护 profile 的 SHA256，来自管理器
+  （`sha256sum /etc/cor-egress/profile.json`）。脚本内不保存该摘要。
+- `-Repository`：当前评审工作树。脚本要求工作树干净并记录 HEAD 提交。
+- `-PythonExecutable`：可选。必须是机器级 Python 3（不在用户 profile 内，
+  且其文件与目录不向 Users/Authenticated Users/Everyone 授予写权限）。
+  未提供时按 PATH 解析并做同样校验；校验失败会拒绝执行，不会降级。
 
 脚本先检查当前令牌是否同时满足管理员角色和 High integrity。中完整性令牌
 必须通过 Windows `sudo.exe --new-window` 请求 UAC；脚本直接传递原生参数
@@ -25,11 +33,24 @@ Get-FileHash scripts\wsl-secure-egress\COR-Full-AdminJob.ps1 -Algorithm SHA256
 证据，不会继续改动主机网络。`-NoSelfElevation` 只用于证明非管理员令牌会
 立即失败，不得当作提权成功。
 
+提权后的执行边界：
+
+- 所有 Windows 工具使用 `System32` 绝对路径，不按 PATH 解析。
+- 工作树干净性、git 提交和 Python 路径在请求 UAC 之前的中完整性会话中
+  解析；提权子进程只接收绝对路径与已记录的提交。
+- 受审查的 `Restore-WslEgressProfile.ps1`、`Prepare-PackageStage.ps1`、
+  `Upgrade-Package.ps1` 会先复制到管理员专用目录并校验哈希，提权进程只
+  执行这些受保护副本，不直接执行用户可写工作树中的脚本。
+- 持久化 UAC worker（`scripts/wsl-secure-egress/uac/`）已于 2026-10-22
+  删除：常驻提权进程接受用户可写队列中的任意作业属于权限提升风险。所有
+  管理员操作只通过上述一次性作业执行。
+
 阶段顺序固定为：
 
+0. 记录已审查提交，把受审脚本复制到管理员专用目录并校验哈希。
 1. 恢复受保护 WireGuard profile，验证 SHA256、schema、密钥格式及 ACL。
-2. 修复工作树、管理员工作目录和包 staging 的受控 ACL，并读取
-   `.git\HEAD` 作为回读证据。
+2. 修复 manifest 目录和包 staging 的受控 ACL（staging 在重建后、生成
+   manifest 摘要前重新加固），并读取 `.git\HEAD` 作为回读证据。
 3. 生成受保护 manifest，执行 `Upgrade-Package.ps1` 的 `Apply` 和
    `Commit`，每个子进程非零立即停止。
 4. 使用恢复后的固定 profile 启动已安装 broker。

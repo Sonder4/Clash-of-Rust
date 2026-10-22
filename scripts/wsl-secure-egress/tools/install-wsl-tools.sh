@@ -17,13 +17,25 @@ require_root() {
 }
 
 require_vps_egress() {
+    # The expected address is deployment data and is never stored here. Read it
+    # from the protected profile or the operator's own record and export it.
+    if [ -z "${EXPECTED_EGRESS_IPV4:-}" ]; then
+        echo 'refusing installation: EXPECTED_EGRESS_IPV4 is not set' >&2
+        exit 21
+    fi
+    case "$EXPECTED_EGRESS_IPV4" in
+        *[!0-9.]*|'')
+            echo 'refusing installation: EXPECTED_EGRESS_IPV4 is not an IPv4 address' >&2
+            exit 21
+            ;;
+    esac
     actual="$(curl -4fsS --connect-timeout 12 --max-time 20 https://ifconfig.co/ip | tr -d '\r\n' || true)"
     if [ "$actual" != "$EXPECTED_EGRESS_IPV4" ]; then
         printf 'refusing installation: egress=%s expected=%s\n' \
             "${actual:-unavailable}" "$EXPECTED_EGRESS_IPV4" >&2
         exit 20
     fi
-    log "verified VPS egress IPv4 ${actual}"
+    log 'verified VPS egress IPv4'
 }
 
 install_base_packages() {
@@ -139,7 +151,6 @@ main() {
     report
 }
 
-EXPECTED_EGRESS_IPV4="${EXPECTED_EGRESS_IPV4:-62.84.164.122}"
 NODE_VERSION="${NODE_VERSION:-v22.23.3}"
 NODESOURCE_KEY_URL="${NODESOURCE_KEY_URL:-https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key}"
 CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.302}"

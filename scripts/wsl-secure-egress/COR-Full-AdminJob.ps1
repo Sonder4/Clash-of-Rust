@@ -15,20 +15,33 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$PackageStage = 'F:\Codex\cor-package-stage',
-    [string]$ManifestDirectory = 'F:\Codex\cor-upload-manifest',
-    [string]$Repository = 'F:\Codex\Clash-of-Rust-work',
-    [string]$JobDirectory = 'F:\Codex\admin-job',
-    [string]$VerifiedBuild = 'F:\Codex\Clash-of-Rust-work\dist\build',
+    [string]$PackageStage = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\cor-package-stage",
+    [string]$ManifestDirectory = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\cor-upload-manifest",
+    [string]$Repository = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\repository",
+    [string]$JobDirectory = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\admin-job",
+    [string]$VerifiedBuild = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\dist\build",
     [string]$InstallationRoot = "$env:ProgramFiles\Clash of Rust WSL",
     [string]$ProfilePath = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\profile.json",
-    [string]$SnapshotRoot = 'F:\Codex\Clash-of-Rust-work\ClashOfRust-network-backups',
+    [string]$SnapshotRoot = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\ClashOfRust-network-backups",
     [string]$TestDistro = 'Ubuntu-26.04',
+    [string]$ExpectedEgressIpv4 = '',
+    [string]$ExpectedProfileSha256 = '',
+    [string]$PythonExecutable = '',
+    [string]$ReviewedCommit = '',
     [switch]$NoSelfElevation
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# An elevated PowerShell resolves bare command names through PATH. Every
+# Windows tool is therefore addressed by its absolute System32 path.
+$script:System32 = Join-Path $env:SystemRoot 'System32'
+$script:PowerShellExe = Join-Path $script:System32 'WindowsPowerShell\v1.0\powershell.exe'
+$script:WslExe = Join-Path $script:System32 'wsl.exe'
+$script:IcaclsExe = Join-Path $script:System32 'icacls.exe'
+$script:WhoamiExe = Join-Path $script:System32 'whoami.exe'
+$script:SudoExe = Join-Path $script:System32 'sudo.exe'
 
 $ProgressPath = Join-Path $JobDirectory 'PROGRESS.txt'
 $ReportPath = Join-Path $JobDirectory 'REPORT.txt'
@@ -54,7 +67,7 @@ function Test-HighIntegrity {
     # WindowsIdentity.Groups does not reliably expose the mandatory label SID
     # on all PowerShell/.NET combinations. Query the token through whoami,
     # which reports the authoritative integrity SID.
-    $tokenText = (& whoami.exe /groups 2>&1 | Out-String)
+    $tokenText = (& $script:WhoamiExe /groups 2>&1 | Out-String)
     $high = ($tokenText -match 'S-1-16-(12288|1688)')
     if (-not $high -and $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         # A real protected write is the final fallback for localized systems
@@ -86,6 +99,10 @@ function Start-SelfElevated {
         '-TestDistro', $TestDistro,
         '-NoSelfElevation'
     )
+    if ($ExpectedEgressIpv4) { $args += @('-ExpectedEgressIpv4', $ExpectedEgressIpv4) }
+    if ($ExpectedProfileSha256) { $args += @('-ExpectedProfileSha256', $ExpectedProfileSha256) }
+    if ($PythonExecutable) { $args += @('-PythonExecutable', $PythonExecutable) }
+    if ($ReviewedCommit) { $args += @('-ReviewedCommit', $ReviewedCommit) }
     try {
         # Start-Process -Verb RunAs can return a medium-integrity child on this
         # host, so elevation is delegated to Windows sudo, which enforces its
@@ -96,8 +113,8 @@ function Start-SelfElevated {
         # a prequoted string through Start-Process adds another quoting layer and
         # can split paths such as C:\Program Files\Clash of Rust WSL. The direct
         # invocation is also captured by the offline command-vector regression.
-        $sudoArguments = @('--new-window', 'powershell.exe') + $args
-        $sudoOutput = @(& 'C:\Windows\System32\sudo.exe' @sudoArguments 2>&1)
+        $sudoArguments = @('--new-window', $script:PowerShellExe) + $args
+        $sudoOutput = @(& $script:SudoExe @sudoArguments 2>&1)
         $sudoExitCode = [int]$LASTEXITCODE
         $waiting = [pscustomobject]@{ ExitCode = $sudoExitCode; Output = $sudoOutput }
         if ([int]$waiting.ExitCode -ne 0) {
@@ -133,6 +150,108 @@ function Invoke-Native {
     return $output
 }
 
+function Assert-SafeToolPath([string]$Path, [string]$Name) {
+    # An elevated process must not execute a tool that an ordinary user can
+    # replace. Reject anything inside a profile directory and anything whose
+    # file or parent directory grants write access to a non-administrative
+    # group.
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw ('{0} was not found at {1}.' -f $Name, $Path)
+    }
+    $full = [IO.Path]::GetFullPath($Path)
+    foreach ($prefix in @($env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, $env:TEMP)) {
+        if ([string]::IsNullOrWhiteSpace($prefix)) { continue }
+        $root = [IO.Path]::GetFullPath($prefix).TrimEnd('\') + '\'
+        if ($full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+            throw ('{0} resolves inside a user profile directory: {1}' -f $Name, $full)
+        }
+    }
+    $writers = @('S-1-5-32-545', 'S-1-1-0', 'S-1-5-11')
+    foreach ($target in @($full, [IO.Path]::GetDirectoryName($full))) {
+        $item = Get-Item -LiteralPath $target -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw ('{0} is redirected: {1}' -f $Name, $target)
+        }
+        foreach ($rule in (Get-Acl -LiteralPath $target).Access) {
+            if ($rule.AccessControlType -ne 'Allow') { continue }
+            $sid = ''
+            try {
+                $sid = $rule.IdentityReference.Translate(
+                    [Security.Principal.SecurityIdentifier]).Value
+            } catch { }
+            if ($sid -in $writers -and
+                ($rule.FileSystemRights -band
+                    [Security.AccessControl.FileSystemRights]::WriteData)) {
+                throw ('{0} is writable by {1}; an elevated process must not run it: {2}' -f
+                    $Name, $sid, $target)
+            }
+        }
+    }
+    $full
+}
+
+function Resolve-PythonExecutable([string]$Requested) {
+    $candidate = $Requested
+    if (-not $candidate) {
+        $command = @(Get-Command python.exe -CommandType Application `
+            -ErrorAction SilentlyContinue) | Select-Object -First 1
+        if (-not $command) {
+            throw 'python.exe was not found; pass -PythonExecutable with a machine-wide Python 3 path.'
+        }
+        $candidate = [string]$command.Source
+    }
+    Assert-SafeToolPath $candidate 'Python'
+}
+
+function Assert-CleanWorktree([string]$Path) {
+    # The elevated job executes scripts taken from the worktree. Refusing a
+    # dirty tree keeps the executed code identical to the reviewed commit.
+    $status = @(& git.exe -C $Path status --porcelain 2>&1)
+    $code = [int]$LASTEXITCODE
+    if ($code -ne 0) {
+        throw ('Unable to read the worktree status; git returned {0}.' -f $code)
+    }
+    $dirty = @($status | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    if ($dirty.Count -ne 0) {
+        throw ('Refusing to run elevated code from a dirty worktree: {0}' -f
+            (($dirty | Select-Object -First 5) -join '; '))
+    }
+    $head = @(& git.exe -C $Path rev-parse HEAD 2>&1)
+    if ([int]$LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($head -join ''))) {
+        throw 'Unable to record the reviewed commit.'
+    }
+    [string](($head | Out-String).Trim())
+}
+
+function Publish-ReviewedTool([string]$Source, [string]$ToolRoot) {
+    # The worktree is writable by the ordinary user, so an elevated process
+    # must not execute scripts directly from it. Copy each reviewed script
+    # into an administrator-only directory, verify the copy against the bytes
+    # that were read, and execute only the protected copy.
+    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        throw "Reviewed tool is missing: $Source"
+    }
+    $item = Get-Item -LiteralPath $Source -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Reviewed tool is redirected: $Source"
+    }
+    $target = Join-Path $ToolRoot $item.Name
+    [IO.File]::WriteAllBytes($target, [IO.File]::ReadAllBytes($Source))
+    if ((Get-SnapshotSha256 $target) -ne (Get-SnapshotSha256 $Source)) {
+        throw ('Protected tool copy verification failed: {0}' -f $item.Name)
+    }
+    $target
+}
+
+function Get-IdentitySids([string]$Path) {
+    @(Get-Acl -LiteralPath $Path |
+        ForEach-Object {
+            $_.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+        } | ForEach-Object {
+            [string]$_.IdentityReference
+        })
+}
+
 function Set-ProtectedDirectoryAcl {
     param([Parameter(Mandatory)][string]$Path, [switch]$KeepUserAccess)
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
@@ -147,9 +266,26 @@ function Set-ProtectedDirectoryAcl {
         '*S-1-5-32-544:(OI)(CI)F'
     )
     if ($KeepUserAccess) { $rules += "*${sid}:(OI)(CI)F" }
-    $result = @(& icacls.exe $Path /inheritance:r /grant:r @rules /T /C 2>&1)
+    # Every existing grant is snapshotted into the job directory before the
+    # tree-wide rewrite so the user can audit and restore it; git recovers the
+    # reviewed contents but not the previous ACL state.
+    $before = Get-IdentitySids $Path
+    $snapshot = Join-Path $JobDirectory ('acl-before-' +
+        [IO.Path]::GetFileName($Path.TrimEnd('\')) + '.txt')
+    [IO.File]::WriteAllText($snapshot, (@($before) -join "`r`n") + "`r`n",
+        [Text.UTF8Encoding]::new($false))
+    $result = @(& $script:IcaclsExe $Path /inheritance:r /grant:r @rules /T /C 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw ('ACL repair failed for {0}: {1}' -f $Path, (($result | Out-String).Trim()))
+    }
+    # A keep-access repair must not silently revoke a previously present
+    # identity; a revoke proves the tree changed beyond the reviewed grant set.
+    if ($KeepUserAccess) {
+        $after = Get-IdentitySids $Path
+        $missing = @($before | Where-Object { $_ -notin $after })
+        if ($missing.Count -gt 0) {
+            throw ('ACL repair dropped existing access for: {0}' -f ($missing -join ', '))
+        }
     }
 }
 
@@ -158,7 +294,8 @@ function Assert-Readable {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Expected file is not readable: $Path"
     }
-    $null = [IO.File]::OpenRead($Path)
+    $stream = [IO.File]::OpenRead($Path)
+    $stream.Dispose()
 }
 
 function ConvertFrom-WslNativeText {
@@ -171,7 +308,7 @@ function ConvertFrom-WslNativeText {
 }
 
 function Assert-AllWslStopped {
-    $result = @(& wsl.exe --list --running --quiet 2>&1)
+    $result = @(& $script:WslExe --list --running --quiet 2>&1)
     $code = [int]$LASTEXITCODE
     if ($code -ne 0) {
         throw ('Unable to prove that every WSL distribution is stopped; ' +
@@ -250,9 +387,14 @@ function New-WslNetworkSnapshot {
     )
     $repositoryFull = [IO.Path]::GetFullPath($Repository).TrimEnd('\')
     $snapshotRootFull = [IO.Path]::GetFullPath($SnapshotRoot).TrimEnd('\')
+    # Snapshots are deployment evidence, not reviewed source. The user's brief
+    # keeps them inside the repository root by name; Permitting any parent
+    # directory would let a redirected path escape the audited tree, so the
+    # root must be the repository-local backups name under the actual
+    # repository passed in.
     $expectedRoot = Join-Path $repositoryFull 'ClashOfRust-network-backups'
     if ($snapshotRootFull -ne $expectedRoot) {
-        throw 'The network snapshot root must remain inside the reviewed repository.'
+        throw ('The network snapshot root must be {0}.' -f $expectedRoot)
     }
 
     Assert-NormalDirectoryPath $repositoryFull
@@ -297,7 +439,7 @@ function New-WslNetworkSnapshot {
             Join-Path $snapshotDirectory ('files\programdata\' + $name)) $name
     }
 
-    $wslDistributions = @(& wsl.exe --list --verbose 2>&1)
+    $wslDistributions = @(& $script:WslExe --list --verbose 2>&1)
     if ([int]$LASTEXITCODE -ne 0) {
         throw 'Unable to snapshot the WSL distribution inventory.'
     }
@@ -403,8 +545,10 @@ function New-WslNetworkSnapshot {
 }
 
 function Invoke-Wsl {
-    param([Parameter(Mandatory)][string]$Command)
-    $out = @(& wsl.exe -d $TestDistro -u root --exec /bin/sh -c $Command 2>&1)
+    # Fixed argv, no shell: the elevated host transaction must never hand a
+    # command string to /bin/sh inside the distribution.
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    $out = @(& $script:WslExe -d $TestDistro -u root --exec @Arguments 2>&1)
     $code = [int]$LASTEXITCODE
     [pscustomobject]@{ Output = @($out); ExitCode = $code }
 }
@@ -424,7 +568,7 @@ function Invoke-IsolatedWsl {
         '--'
     ) + $Command
     $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = (Join-Path $env:SystemRoot 'System32\wsl.exe')
+    $start.FileName = $script:WslExe
     $quoted = foreach ($argument in $arguments) {
         if ($argument.Length -gt 0 -and $argument -notmatch '[\s"]') {
             $argument
@@ -500,7 +644,7 @@ print(json.dumps({'schema':1,'generation':request['generation'],'checks':checks}
 '@
     $request = [ordered]@{
         generation = $generation
-        vps_ipv4 = '62.84.164.122'
+        vps_ipv4 = $ExpectedEgressIpv4
         providers = [ordered]@{
             openai = 'api.openai.com'
             anthropic = 'api.anthropic.com'
@@ -534,7 +678,7 @@ print(json.dumps({'schema':1,'generation':request['generation'],'checks':checks}
     if ($v6.ExitCode -eq 0) {
         throw 'IPv6 egress unexpectedly succeeded in the strict launcher.'
     }
-    $nft = Invoke-Wsl '/usr/sbin/nft list tables'
+    $nft = Invoke-Wsl @('/usr/sbin/nft', 'list', 'tables')
     if ($nft.ExitCode -ne 0 -or
         (($nft.Output -join "`n") -notmatch 'cor_egress_guard')) {
         throw 'Linux fail-closed nftables guard is missing.'
@@ -542,10 +686,33 @@ print(json.dumps({'schema':1,'generation':request['generation'],'checks':checks}
 }
 
 try {
+    # The deployment address and the approved profile digest are private data
+    # and are never stored in this file. The operator supplies both from the
+    # protected profile before running the job.
+    if ($ExpectedEgressIpv4 -notmatch '^\d{1,3}(\.\d{1,3}){3}$' -or
+        -not [Net.IPAddress]::TryParse(
+            $ExpectedEgressIpv4, [ref][Net.IPAddress]::Loopback) -or
+        $ExpectedEgressIpv4 -match '^0\.|^127\.|^(2(2[3-9]|[3-9][0-9])|2[34-9][0-9])\.') {
+        throw 'Pass -ExpectedEgressIpv4 with the approved public VPS IPv4 address.'
+    }
+    $ExpectedEgressIpv4 = $ExpectedEgressIpv4.Trim()
+    if ($ExpectedProfileSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw 'Pass -ExpectedProfileSha256 with the approved 64-hex-digit profile digest.'
+    }
+    $ExpectedProfileSha256 = $ExpectedProfileSha256.ToUpperInvariant()
+
     $proof = Test-HighIntegrity
     Write-JobLog ('identity user={0} high={1} administrator={2}' -f
         $proof.User, $proof.High, $proof.Administrator)
     if (-not $proof.High -or -not $proof.Administrator) {
+        # The interpreter is resolved and the worktree is inspected in the
+        # invoking medium-integrity session, before any elevation request.
+        # Neither step runs elevated, so a user-writable git or python cannot
+        # be used to escalate.
+        $PythonExecutable = Resolve-PythonExecutable $PythonExecutable
+        $ReviewedCommit = Assert-CleanWorktree $Repository
+        Write-JobLog ('reviewed commit={0} python={1}' -f
+            $ReviewedCommit, $PythonExecutable)
         Start-SelfElevated
     }
 
@@ -561,11 +728,33 @@ try {
     Write-JobLog ('stage 0b: snapshot={0} sha256={1}' -f
         $snapshot.manifest, $snapshot.manifest_sha256)
 
+    Write-JobLog 'stage 0c: publish the reviewed tools to an administrator-only directory'
+    if ($ReviewedCommit -notmatch '^[0-9a-f]{40}([0-9a-f]{24})?$') {
+        throw 'The reviewed commit was not supplied by the invoking session.'
+    }
+    Write-JobLog ('stage 0c: reviewed commit={0}' -f $ReviewedCommit)
+    $PythonExecutable = Assert-SafeToolPath $PythonExecutable 'Python'
+    $toolRoot = Join-Path $JobDirectory 'protected-tools'
+    if (-not (Test-Path -LiteralPath $toolRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+    }
+    Set-ProtectedDirectoryAcl -Path $toolRoot
+    $reviewedTools = Join-Path $Repository 'scripts\wsl-secure-egress'
+    $restoreTool = Publish-ReviewedTool (
+        Join-Path $reviewedTools 'Restore-WslEgressProfile.ps1') $toolRoot
+    $stageTool = Publish-ReviewedTool (
+        Join-Path $reviewedTools 'Prepare-PackageStage.ps1') $toolRoot
+    $upgradeTool = Publish-ReviewedTool (
+        Join-Path $reviewedTools 'Upgrade-Package.ps1') $toolRoot
+    Write-JobLog 'stage 0c: protected tool copies verified'
+
     Write-JobLog 'stage 1a: restore the protected WireGuard profile'
-    $profileRestore = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-        (Join-Path $Repository 'scripts\wsl-secure-egress\Restore-WslEgressProfile.ps1'),
-        '-ProfilePath', $ProfilePath, '-Execute'
+    $profileRestore = Invoke-Native -FilePath $script:PowerShellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $restoreTool,
+        '-ProfilePath', $ProfilePath,
+        '-ExpectedSha256', $ExpectedProfileSha256,
+        '-ExpectedEndpointIpv4', $ExpectedEgressIpv4,
+        '-Execute'
     ) -StageName 'RestoreProfile'
     $profileResponse = (($profileRestore | Out-String).Trim() | ConvertFrom-Json)
     if ([string]$profileResponse.outcome -ne 'succeeded' -or
@@ -575,23 +764,22 @@ try {
     }
     Write-JobLog 'stage 1a: profile restored with hash, schema and ACL checks'
 
-    Write-JobLog 'stage 1: repair repository and staging ACLs'
-    Set-ProtectedDirectoryAcl -Path $Repository -KeepUserAccess
-    $adminHost = Join-Path (Split-Path -Parent $PSScriptRoot) 'admin-host'
-    if (Test-Path -LiteralPath $adminHost -PathType Container) {
-        Set-ProtectedDirectoryAcl -Path $adminHost -KeepUserAccess
-    }
-    Set-ProtectedDirectoryAcl -Path $PackageStage
+    Write-JobLog 'stage 1: protect the manifest directory'
+    # Only directories created for this deployment are rewritten. The reviewed
+    # worktree is deliberately left untouched: a tree-wide /T repair there
+    # would revoke the developer's own ACEs without a prior snapshot and the
+    # job never executes from it after stage 0c. The package stage is
+    # protected after its rebuild, because -Replace recreates the directory.
     Set-ProtectedDirectoryAcl -Path $ManifestDirectory
     Assert-Readable (Join-Path $Repository '.git\HEAD')
-    Write-JobLog 'stage 1: ACL and repository readback passed'
+    Write-JobLog 'stage 1: manifest ACL and repository readback passed'
 
     Write-JobLog 'stage 2a: rebuild the stage from the reviewed repository'
-    $stageBuilder = Join-Path $Repository 'scripts\wsl-secure-egress\Prepare-PackageStage.ps1'
-    $stageBuild = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $stageBuilder,
+    $stageBuild = Invoke-Native -FilePath $script:PowerShellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $stageTool,
         '-Repository', $Repository, '-PackageStage', $PackageStage,
         '-VerifiedBuild', $VerifiedBuild,
+        '-PythonExecutable', $PythonExecutable,
         '-Execute', '-Replace'
     ) -StageName 'PreparePackageStage'
     $stageResponse = (($stageBuild | Out-String).Trim() | ConvertFrom-Json)
@@ -601,26 +789,30 @@ try {
             Join-Path $PackageStage 'resources\wsl-secure-egress\WslSecureEgress.psm1') -PathType Leaf)) {
         throw 'The reviewed package stage was not built and verified.'
     }
-    Write-JobLog 'stage 2a: package stage rebuilt and receipt verified'
+    # The rebuild replaced the directory, so the protected ACL is applied only
+    # now, before the manifest digest is created from these contents.
+    Set-ProtectedDirectoryAcl -Path $PackageStage
+    Write-JobLog 'stage 2a: package stage rebuilt, protected and verified'
 
     Write-JobLog 'stage 2b: create and apply the protected package manifest'
-    $upgrade = Join-Path $Repository 'scripts\wsl-secure-egress\Upgrade-Package.ps1'
     $manifest = Join-Path $ManifestDirectory 'cor-upgrade-manifest.json'
-    $create = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $upgrade,
+    $create = Invoke-Native -FilePath $script:PowerShellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $upgradeTool,
         '-Action', 'CreateManifest', '-PackagePath', $PackageStage,
         '-ManifestPath', $manifest
     ) -StageName 'CreateManifest'
     Assert-Readable $manifest
-    $digest = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash
-    $null = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $upgrade,
+    # Get-FileHash cannot always load in the elevated worker environment; the
+    # .NET stream hash is equivalent and does not depend on module autoloading.
+    $digest = (Get-SnapshotSha256 $manifest)
+    $null = Invoke-Native -FilePath $script:PowerShellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $upgradeTool,
         '-Action', 'Apply', '-InstallationPath', $InstallationRoot,
         '-PackagePath', $PackageStage, '-ManifestPath', $manifest,
         '-ExpectedManifestSha256', $digest
     ) -StageName 'Apply'
-    $null = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $upgrade,
+    $null = Invoke-Native -FilePath $script:PowerShellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $upgradeTool,
         '-Action', 'Commit', '-InstallationPath', $InstallationRoot,
         '-PackagePath', $PackageStage
     ) -StageName 'Commit'
@@ -628,7 +820,7 @@ try {
 
     Write-JobLog 'stage 3: start the installed WireGuard egress broker'
     $manage = Join-Path $InstallationRoot 'resources\wsl-secure-egress\Manage-WslSecureEgress.ps1'
-    $start = Invoke-Native -FilePath 'powershell.exe' -Arguments @(
+    $start = Invoke-Native -FilePath $script:PowerShellExe -Arguments @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $manage,
         '-Action', 'Start', '-Backend', 'WireGuard',
         '-ProfilePath', $ProfilePath, '-Execute'
@@ -653,7 +845,7 @@ try {
         throw 'The installed broker journal is not in the running phase after Start.'
     }
     Assert-IsolatedRuntime $response $state
-    $checks.Add('public_ipv4=62.84.164.122')
+    $checks.Add('public_ipv4=verified')
     $checks.Add('virtual_interfaces=lo,wg0,cor-bg0')
     $checks.Add('default_route=wg0')
     $checks.Add('host_mounts=hidden')

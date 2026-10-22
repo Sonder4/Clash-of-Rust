@@ -6,11 +6,17 @@ The cleanup targeted only the Ubuntu-22.04 WSL instance. It did not touch `C:\Us
 
 ## Backup
 
-Before changes, the following files were copied to `docs/wsl-secure-egress/backups/live-20261019/ubuntu-22.04/`:
+Before changes, the following files were copied to a host-local directory
+(now `docs/wsl-secure-egress/backups/live-20261019/`, ignored by Git):
 
 - `/etc/resolv.conf`
 - `/etc/systemd/system/xuan-claude-de*.service`
 - `/etc/profile.d/xuan-claude-de.sh.disabled-by-clash-of-rust`
+
+These copies were removed from version control on 2026-10-22. They are
+host-system backups, not reviewed source, and one of them carried a legacy
+proxy credential placeholder. Keep them outside Git; the paths above still
+describe what was captured.
 
 ## Changes applied
 

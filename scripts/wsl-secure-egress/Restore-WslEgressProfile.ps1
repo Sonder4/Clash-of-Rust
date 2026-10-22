@@ -4,9 +4,15 @@
 Restore the protected WireGuard profile from the installed Linux manager.
 
 .DESCRIPTION
-Reads the root-owned profile from Ubuntu-22.04 through binary standard output,
-validates its hash and schema without printing secrets, and atomically writes
-it to the Windows profile location with a protected ACL.
+Reads the root-owned profile from the installed manager distribution through
+binary standard output, validates its hash and schema without printing
+secrets, and atomically writes it to the Windows profile location with a
+protected ACL.
+
+The approved SHA256 is mandatory and is never shipped with the script. Obtain
+it from the manager distribution, for example with
+`sha256sum /etc/cor-egress/profile.json`, which prints only the digest. The
+source distribution defaults to the manager recorded in the broker journal.
 
 Preview is the default. Pass -Execute from an elevated PowerShell session.
 The script never writes profile contents to its logs.
@@ -14,14 +20,46 @@ The script never writes profile contents to its logs.
 [CmdletBinding()]
 param(
     [string]$ProfilePath = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\profile.json",
-    [string]$SourceDistro = 'Ubuntu-22.04',
-    [string]$ExpectedSha256 = '9DA000C7399DE02A675C18AE929356DDC5F6072ABA9169E4BE84A85519A397F7',
+    [string]$SourceDistro = '',
+    [string]$ExpectedSha256 = '',
+    [string]$ExpectedEndpointIpv4 = '',
+    [string]$StatePath = (Join-Path $env:ProgramData 'ClashOfRust\WslEgress\state.json'),
     [string]$WslExecutable = (Join-Path $env:SystemRoot 'System32\wsl.exe'),
     [switch]$Execute
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+function Resolve-SourceDistro([string]$Requested, [string]$Journal) {
+    $name = $Requested
+    if (-not $name) {
+        if (-not (Test-Path -LiteralPath $Journal -PathType Leaf)) {
+            throw 'Pass -SourceDistro; no broker journal records the manager distribution.'
+        }
+        $name = [string]((Get-Content -LiteralPath $Journal -Raw | ConvertFrom-Json).manager_distro)
+    }
+    # The name is placed on the wsl.exe command line, so only plain WSL
+    # distribution names are accepted.
+    if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
+        throw 'The manager distribution name is missing or invalid.'
+    }
+    $name
+}
+
+function Assert-UnicastIpv4([object]$Value, [string]$Name) {
+    $address = $null
+    $text = [string]$Value
+    if ($text -notmatch '^\d{1,3}(\.\d{1,3}){3}$' -or
+        -not [Net.IPAddress]::TryParse($text, [ref]$address) -or
+        $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+        throw "The installed Linux profile has an invalid $Name."
+    }
+    $bytes = $address.GetAddressBytes()
+    if ($bytes[0] -eq 0 -or $bytes[0] -eq 127 -or $bytes[0] -ge 224) {
+        throw "The installed Linux profile has a non-unicast $Name."
+    }
+}
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -90,7 +128,7 @@ function Read-LinuxProfile([string]$Distro, [string]$Executable) {
     }
 }
 
-function Assert-ProfileDocument([byte[]]$Bytes) {
+function Assert-ProfileDocument([byte[]]$Bytes, [string]$Distro, [string]$Endpoint) {
     $text = [Text.UTF8Encoding]::new($false, $true).GetString($Bytes)
     $profile = $text | ConvertFrom-Json
     $required = @(
@@ -103,15 +141,24 @@ function Assert-ProfileDocument([byte[]]$Bytes) {
             throw "The installed Linux profile is missing $name."
         }
     }
+    # Deployment values (endpoint, tunnel and resolver addresses) are private
+    # data. They are validated by shape here and pinned by the approved hash.
     if ([int]$profile.schema -ne 1 -or
         [string]$profile.backend -ne 'wireguard' -or
-        [string]$profile.endpoint_ipv4 -ne '62.84.164.122' -or
-        [int]$profile.endpoint_port -ne 51820 -or
-        [string]$profile.manager_distro -ne 'Ubuntu-22.04' -or
-        [string]$profile.tunnel_address -ne '10.77.0.2/32' -or
-        [string]$profile.resolver_ipv4 -ne '10.77.0.1' -or
+        [string]$profile.manager_distro -ne $Distro -or
+        [int]$profile.endpoint_port -lt 1 -or [int]$profile.endpoint_port -gt 65535 -or
         [int]$profile.uid -lt 1000 -or [int]$profile.gid -lt 1000) {
         throw 'The installed Linux profile does not match the protected configuration.'
+    }
+    Assert-UnicastIpv4 $profile.endpoint_ipv4 'endpoint_ipv4'
+    Assert-UnicastIpv4 $profile.resolver_ipv4 'resolver_ipv4'
+    $tunnel = [string]$profile.tunnel_address
+    if ($tunnel -notmatch '^([^/]+)/(\d{1,2})$' -or [int]$Matches[2] -gt 32) {
+        throw 'The installed Linux profile has an invalid tunnel_address.'
+    }
+    Assert-UnicastIpv4 $Matches[1] 'tunnel_address'
+    if ($Endpoint -and [string]$profile.endpoint_ipv4 -ne $Endpoint) {
+        throw 'The installed Linux profile endpoint differs from the expected endpoint.'
     }
     foreach ($name in @('private_key', 'peer_public_key')) {
         try {
@@ -195,12 +242,17 @@ function Write-ProtectedProfile([string]$Target, [byte[]]$Bytes) {
 }
 
 try {
+    if ($ExpectedSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw 'Pass -ExpectedSha256 with the approved 64-hex-digit profile digest.'
+    }
+    $ExpectedSha256 = $ExpectedSha256.ToUpperInvariant()
+    $SourceDistro = Resolve-SourceDistro $SourceDistro $StatePath
     $bytes = Read-LinuxProfile $SourceDistro $WslExecutable
     $actual = Get-Sha256Bytes $bytes
     if ($actual -ne $ExpectedSha256) {
         throw 'The installed Linux profile does not match the approved SHA256.'
     }
-    Assert-ProfileDocument $bytes
+    Assert-ProfileDocument $bytes $SourceDistro $ExpectedEndpointIpv4
     if ($Execute) {
         Assert-Administrator
         Write-ProtectedProfile $ProfilePath $bytes

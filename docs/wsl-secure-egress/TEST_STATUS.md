@@ -66,6 +66,53 @@ checks its commit, baseline, constraints and file hashes, and checks the
 artifact's frozen `build_inputs` against it. It does not alter the worktree or
 substitute the checked-in lockfile for the resolved CI lockfile.
 
+### 2026-10-22 security review fixes (P0/P1), offline only
+
+This round changed repository code and documents. No elevated action, WSL
+runtime change, firewall change or live network probe was performed.
+
+| Check | Actual result |
+| --- | --- |
+| Persistent UAC worker (project-owned) | Removed: `scripts/wsl-secure-egress/uac/` and `docs/wsl-secure-egress/UAC_WORKER.md` deleted |
+| `tests/admin-job-acl.ps1` | PASS, 77 checks; consent `NOT_RUN`; elevation vector `PASS` |
+| `tests/restore-profile-unit.ps1` | PASS, 23 assertions |
+| `tests/prepare-package-stage-unit.ps1` | PASS, 75 assertions |
+| `tests/windows-unit.ps1` | PASS, 166 assertions |
+| `tests/elevation-unit.ps1` | PASS, 21 assertions |
+| `tests/package-upgrade-unit.ps1` | PASS, 53 assertions |
+| `tests/windows-workflow.ps1` | PASS, 251 assertions |
+| `tests/linux_static_test.py` | PASS, 87 tests, 2 skipped |
+| `tests/tool-installer-static-unit.py` | PASS, 9 tests |
+| `tests/provision_unit.py` | PASS, 27 tests |
+| `tests/payload_unit.py` | PASS (16 skipped) |
+| `tests/server_unit.py` | PASS |
+| Hosted CI for this round | `NOT_RUN` at the time this section was written |
+| UAC / admin transaction / live egress / fault tests | `NOT_RUN` |
+
+Changes that produced these results:
+
+- The administrator job no longer embeds the VPS IPv4, the profile digest or
+  `F:\Codex` staging paths. `-ExpectedEgressIpv4` and `-ExpectedProfileSha256`
+  are mandatory caller inputs; the profile restore call forwards both.
+- The elevated job resolves Windows tools from absolute `System32` paths,
+  validates the Python interpreter and a clean worktree in the invoking
+  medium-integrity session, and executes only hash-verified copies of the
+  reviewed scripts from an administrator-only directory.
+- The recursive ACL rewrite of the whole worktree was removed. Staging and
+  manifest directories are protected with a pre-change grant snapshot, and a
+  keep-access repair refuses to drop an existing identity. Package-stage
+  protection now runs after the rebuild and before the manifest digest.
+- `Get-FileHash` was replaced by the existing .NET SHA256 helper inside the
+  elevated path, and the root-shell `wsl.exe ... /bin/sh -c` call was replaced
+  by a fixed argv invocation.
+- `tools/install-wsl-tools.sh` no longer defaults `EXPECTED_EGRESS_IPV4`; a
+  missing or malformed value exits 21 before any network request.
+- The real VPS IPv4 was removed from tracked documents (the fork is public).
+  It remains in this repository's Git history; history rewriting was not run.
+- Eight host-system backup files under
+  `docs/wsl-secure-egress/backups/live-20261019/` were removed from version
+  control and the directory is now ignored.
+
 ### Earlier 2026-10-22 build-verification and snapshot-gate validation
 
 The following commands ran after the earlier staging work and before a new
@@ -549,7 +596,7 @@ UAC-approved recovery.
 | Upstream synchronization at that time | PASS | `upstream/main=37683750b37be9d2bbcfb22804bec96174e14af5`; that historical fork HEAD was 39 commits ahead and 0 behind |
 | Stop transaction | PASS | Linux manager returned `succeeded`, phase `Guarded`; owned namespaces and policy routes were removed |
 | First Start after Stop | PASS | Linux manager returned `succeeded`, phase `Running`; both `cor-egress-transport` and `cor-egress-gw` were recreated |
-| Isolated IPv4 exit | PASS | `api.ipify.org` and `ifconfig.me/ip` both returned `62.84.164.122` |
+| Isolated IPv4 exit | PASS | `api.ipify.org` and `ifconfig.me/ip` both returned the VPS IPv4 recorded in the protected profile |
 | Isolated network view | PASS | only `lo`, `cor-bg0`, `wg0`; default IPv4 route is `wg0`; DNS is `10.77.0.1`; IPv6 default is unreachable |
 | OpenAI endpoint | PASS | HTTPS/TLS reached `api.openai.com`; HTTP 401 for missing bearer authentication |
 | Anthropic endpoint | PASS | HTTPS/TLS reached `api.anthropic.com`; HTTP 405 for a GET request |
@@ -584,7 +631,7 @@ The Stop→Start regression was exercised through the real broker:
   Windows fallback was available.
 - UAC `Start -Execute`: `succeeded`, phase `connected_unverified`; all five
   scope checks were `PASS`.
-- Final isolated IPv4: `62.84.164.122`; Claude Code CLI: `2.1.302`.
+- Final isolated IPv4: the VPS IPv4 recorded in the protected profile; Claude Code CLI: `2.1.302`.
 - Windows baseline after recovery: `ipgw.neu.edu.cn` HTTP 302 and
   `api.okinto.com` HTTP 200.
 

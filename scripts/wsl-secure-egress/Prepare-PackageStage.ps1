@@ -14,9 +14,10 @@ Preview is the default. Pass -Execute to write the staging tree.
 #>
 [CmdletBinding()]
 param(
-    [string]$Repository = 'F:\Codex\Clash-of-Rust-work',
+    [string]$Repository = '',
     [string]$VerifiedBuild = $null,
-    [string]$PackageStage = 'F:\Codex\cor-package-stage',
+    [string]$PackageStage = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\cor-package-stage",
+    [string]$PythonExecutable = 'python.exe',
     [switch]$Execute,
     [switch]$Replace
 )
@@ -183,7 +184,7 @@ function Get-VerifiedBuild([string]$Repository, [string]$BuildPath) {
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        $raw = @(& python.exe $verifier --repository $Repository `
+        $raw = @(& $PythonExecutable $verifier --repository $Repository `
             --build $BuildPath --system windows --arch x64 2>&1)
     } finally {
         $ErrorActionPreference = $previousPreference
@@ -228,6 +229,9 @@ function Get-VerifiedBuild([string]$Repository, [string]$BuildPath) {
 $verifiedBuildResult = $null
 $binaryDirectory = $null
 try {
+    if ([string]::IsNullOrWhiteSpace($Repository)) {
+        throw 'Pass -Repository with the reviewed worktree path.'
+    }
     $repositoryPath = [IO.Path]::GetFullPath($Repository).TrimEnd('\')
     $packageStagePath = [IO.Path]::GetFullPath($PackageStage).TrimEnd('\')
     if ([string]::IsNullOrWhiteSpace($VerifiedBuild)) {

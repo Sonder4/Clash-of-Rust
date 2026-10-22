@@ -39,3 +39,9 @@ The new Ubuntu 26.04 workspace installer was syntax-checked with `bash -n` and e
 ## Project UAC worker launch
 
 The project-owned `uac/Start-CorElevatedWorker.ps1` was parser-validated and invoked through Windows `sudo.exe --new-window`. The UAC request remained pending and then returned `operation cancelled by user`; `WORKER-READY.txt` was not created. The resident worker therefore remains unverified and no administrator network change was applied.
+
+On 2026-10-22 the project-owned persistent worker was deleted. A long-lived
+elevated process that executes arbitrary scripts from a user-writable staging
+queue is a privilege-escalation surface reviewed as P0. Elevated work now goes
+only through the one-shot `COR-Full-AdminJob.ps1`, which is itself invoked by
+the user's explicit UAC consent.

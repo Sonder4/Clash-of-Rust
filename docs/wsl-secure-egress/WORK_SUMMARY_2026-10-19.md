@@ -53,7 +53,7 @@ single-instance mutex，该测试要求桌面端未运行，属环境冲突。�
 1. 恢复 `E:\Desktop\workspace\Project\Clash-of-Rust` 的 ACL。
 2. 用新 `manager.py` 更新 `C:\Program Files\Clash of Rust WSL`。
 3. 修 `Ubuntu-26.04` 的 `/etc/wsl.conf` 哈希漂移并 `Start -Execute`。
-4. 出口验收：`curl -4 https://ifconfig.co/ip` 应为 `62.84.164.122`。
+4. 出口验收：`curl -4 https://ifconfig.co/ip` 应等于受保护 profile 中的 VPS IPv4。
 5. 断隧道 / 冷启动 / 物理网络切换 fail-closed 验收。
 6. `Ubuntu-26.04` 装工具链并测 Claude Code。
 

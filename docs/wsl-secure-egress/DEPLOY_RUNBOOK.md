@@ -90,7 +90,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 | 检查 | 期望值 |
 | --- | --- |
-| 严格启动器中 `curl -4 https://ifconfig.co/ip` | `62.84.164.122` |
+| 严格启动器中 `curl -4 https://ifconfig.co/ip` | 受保护 profile 中记录的 VPS IPv4 |
 | 严格启动器中 `getent hosts api.openai.com` | 成功 |
 | 严格启动器中 `curl -6 https://ifconfig.co/ip` | 失败（IPv6 必须阻断） |
 | 严格启动器中 `command -v ipconfig.exe` | 未找到 |
@@ -100,7 +100,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 | Windows profile | 存在、ACL 受保护、哈希和 schema 已验证 |
 | 作业标记 | 当前受保护作业报告明确写出 `DONE.txt` 或等价成功状态 |
 
-本手册中的 `62.84.164.122` 来自当前私密 profile，只用于本机验收。配置只存在
+本手册不记录 VPS 地址；该值来自当前私密 profile，只用于本机验收。配置只存在
 于受保护的本地 profile，不应写入仓库。任何未重新执行的检查保持
 `NOT_RUN`，失败保持 `FAIL` 或 `BLOCKED`。
 
@@ -111,7 +111,7 @@ UAC 弹窗出现或 sudo 返回 0 都不能单独证明成功。
 
 ```bash
 # 在严格隔离启动器中执行
-curl -4 -fsS https://ifconfig.co/ip            # 必须 62.84.164.122
+curl -4 -fsS https://ifconfig.co/ip            # 必须等于受保护 profile 中的 VPS IPv4
 curl -4 -fsS https://ifconfig.co/country       # 必须 Germany
 curl -4 -sS -o /dev/null -w '%{http_code}\n' https://api.openai.com/v1/models
 curl -4 -sS -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/v1/models

@@ -49,9 +49,21 @@ class AuthoritativeInstallerTests(unittest.TestCase):
         self.assertIn('"${actual:-unavailable}"', gate)
         self.assertIn("EXPECTED_EGRESS_IPV4", gate)
         self.assertIn("exit 20", gate)
-        self.assertIn(
-            'EXPECTED_EGRESS_IPV4="${EXPECTED_EGRESS_IPV4:-62.84.164.122}"',
+        # The expected address is deployment data. The installer must refuse to
+        # run when it is absent instead of falling back to a stored address.
+        self.assertIn('if [ -z "${EXPECTED_EGRESS_IPV4:-}" ]', gate)
+        self.assertIn("exit 21", gate)
+
+    def test_no_deployment_address_is_stored_in_the_installer(self):
+        self.assertNotRegex(
             self.source,
+            r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+            "The installer must not embed a deployment IPv4 address.",
+        )
+        self.assertNotRegex(
+            self.source,
+            r"EXPECTED_EGRESS_IPV4:-[0-9]",
+            "The installer must not default EXPECTED_EGRESS_IPV4 to an address.",
         )
 
     def test_vps_gate_precedes_every_install_action(self):
