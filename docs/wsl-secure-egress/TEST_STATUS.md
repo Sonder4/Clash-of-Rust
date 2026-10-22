@@ -705,3 +705,110 @@ Static, offline and isolated data-plane checks pass. The live WSL tunnel remains
 down with the endpoint disabled and fail-closed in force. The drop point is
 narrowed to the Windows side of the WSL boundary but is not located. No
 end-to-end WSL egress, exit location or zero-leak claim is made.
+
+---
+
+## 2026-10-23 WSL 出网恢复与 Ubuntu-26.04 核查（后续会话）
+
+前提：用户明确授权验证性测试、构建，并要求以 Git 保存状态、做好文档记录。
+用户随后明确判断故障根因为「此前无法将数据传输到 VPS 是被 clash of rust 截流了」，
+并要求「ubuntu26 以及 22 必须要正常连接到 VPS 并且访问外网」。
+
+### 根因确认
+
+用户判断得到实测证实。`Find-NetRoute` 显示到 VPS v4/v6 的路由均经 `Meta` TUN 适配器
+（metric 0）；WSL 侧 `tcpdump` 证明封装包已正常离开 WSL（`eth0` 上
+`172.19.104.128.51821 > 62.84.164.122.51820`，SNAT 已应用），但 VPS 侧
+`cor-wsl0` RX 不增长、`latest-handshakes` 冻结。丢包点收敛到 Windows 侧 TUN 边界。
+
+此前诊断中「GW 命名空间缺少 fwmark / `ip rule` bypass」的判断已被隔离集成测试
+推翻（同一代码路径、同样无 fwmark，隧道通过），本次进一步确认它不是本故障成因。
+
+### 已生效的改动
+
+| 对象 | 改动 | 说明 |
+| --- | --- | --- |
+| `profiles/28b1ea79-….yaml`（活动订阅） | 在顶层 `rules` 顶部插入 `- IP-CIDR,62.84.164.122/32,DIRECT` 及三行注释 | 经应用自身机制落盘；**不改上游应用源码、不装第二份客户端** |
+| 运行核心 | 重启后由应用从上述 profile 重新生成 `config.yaml`，规则生效 | `/rules` 返回 6 条，`IPCIDR 62.84.164.122/32 -> DIRECT` 位于 `MATCH` 之前 |
+
+关键机制结论（读 `apps/desktop/src/engine/mod.rs` 得到）：
+
+- `start_core()` 每次启动都用 `atomic_write` 从**活动 profile** 重新生成
+  `runtime/config.yaml`。手改 `config.yaml` 会被下次启动覆盖，必须改 profile。
+- `candidate.yaml` 只是 `validate_in()` 跑 `mihomo -t` 用的临时文件，不会被复制回
+  `config.yaml`。此前「应用可能用它覆盖 config.yaml」的担心不成立。
+- 控制器 reload 的实际契约是 `PUT /configs?force=true` + body `{"payload": "<完整 YAML>"}`；
+  早前 `{"path":…}` 形式的尝试被拒（`Body invalid`）是请求格式错误，不是权限问题。
+
+备份（均在仓库外临时区，未入库）：`clash-config-backup-20261023.yaml`（原 config.yaml，
+3488 B）、`clash-profile-backup-20261023.yaml`（原 profile）、
+`clash-settings-backup-20261023.json`（原 settings.json）。
+
+### 验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `mihomo -t` 校验改动后的 profile | 通过（exit 0，`test is successful`） |
+| 重启后 `/rules` | 6 条，VPS 直连规则在最前 |
+| `ipgw.neu.edu.cn` | HTTP 302（重启后复验） |
+| `api.okinto.com` | HTTP 200（重启后复验） |
+| WSL `wg0` latest handshake | **恢复更新**（此前冻结 2 小时以上） |
+| WSL 隧道内出口 IP | `62.84.164.122`（VPS 德国 IPv4） |
+| WSL 隧道内 DNS | `dns.google` 返回 `Status:0` 与 A 记录，解析正常 |
+| WSL 通用外网 | `https://example.com/` HTTP 200 |
+| nft guard `cor_egress_guard` | 仍为 `policy drop`，fail-closed 语义未被破坏 |
+
+### Ubuntu-26.04 核查结论（重要）
+
+Ubuntu-26.04 的 payload **已完整安装且正确**，此前判断有误：
+
+- `/usr/local/lib/cor-egress/` 四个文件哈希与 `payload-receipt.json` 完全一致。
+- `deploy.json` 记录 `payload_Ubuntu-26.04: ok`、`payload_Ubuntu-22.04: ok`。
+- `/etc/wsl.conf` 已含 `[boot] command = /usr/local/lib/cor-egress/manager guard`。
+
+之前得出「未安装」的结论是因为 Git Bash 把 WSL 内绝对路径转换成 `D:/Git/...`，
+`find`/`cat` 全部落空；加 `MSYS_NO_PATHCONV=1` 后即可正确访问。
+
+两者真实差异在状态深度：
+
+| | Ubuntu-22.04 | Ubuntu-26.04 |
+| --- | --- | --- |
+| `/var/lib/cor-egress/state.json` phase | `Guarded` | `DistroConfigured` |
+| `/etc/cor-egress/profile.json` | 有（含 endpoint、tunnel 10.77.0.2/32、resolver 10.77.0.1） | **无** |
+| `/var/lib/cor-egress/scope-attestation.json` | 有 | **无** |
+| `/var/lib/cor-egress/wireguard.key` | 有 | **无** |
+| 隧道 | 通 | 未建立 |
+
+VPS 侧 `cor-wsl0` 当前只有一个 peer（`allowed ips: 10.77.0.2/32`，即 22.04）。
+**同一 peer 与同一 tunnel IP 不能同时服务两个发行版。** 让 26.04 也连上 VPS 需要：
+新密钥对、VPS 侧新增 peer、分配新 tunnel IP（如 10.77.0.3/32），
+这属于修改 VPS 服务器配置，超出本轮「配置 26.04」的范围，未执行。
+
+因此用户要求「ubuntu26 以及 22 必须要正常连接到 VPS 并且访问外网」目前
+**只对 Ubuntu-22.04 成立**；Ubuntu-26.04 尚未连通，阻塞原因是需要 VPS 侧新增 peer，
+且该步骤需单独授权。
+
+### 顺带发现（与本任务相关但未改）
+
+SSH alias `ciallo` 在 `~/.ssh/config` 中硬编码 `HostName 2401:1da0:22:f7::a` 且
+`AddressFamily inet6`。该 IPv6 地址的默认路由经 `Meta` TUN（ifIndex 64），
+TCP 22 虽可连通但握手被关闭；改用 IPv4 + 同一密钥可正常登录并读取 VPS 状态。
+这与 WSL 故障同源（VPS 地址被 TUN 捕获），但**未给 IPv6 地址添加直连规则**，
+因为改动影响面大于本轮范围。
+
+### 未完成项
+
+| 项 | 状态 | 阻塞原因 |
+| --- | --- | --- |
+| Ubuntu-26.04 连接 VPS | NOT_RUN | 需 VPS 侧新增 peer + 新 tunnel IP，属服务器配置，需单独授权 |
+| VPS IPv6 直连规则 | NOT_RUN | 影响面待评估 |
+| fail-closed 验收 | NOT_RUN | 会关闭 endpoint，属独立授权项 |
+| Windows 侧丢包逐跳定位 | NOT_RUN | 需 pktmon 等改变系统状态的手段 |
+| 冷启动、重启、睡眠恢复、切网 | NOT_RUN | 需隔离环境 |
+| Docker 受保护出口 | NOT_SUPPORTED | 独立适配器未实现 |
+
+### 状态陈述
+
+Ubuntu-22.04 已端到端打通：WSL 流量经 Clash of Rust 直连规则出到 VPS 德国 IPv4，
+DNS 经隧道解析，guard 的 fail-closed 语义保持。**这只是单发行版、单路径的实测结果，
+不构成「任何时候、任何网络零泄漏」的结论。** Ubuntu-26.04 尚未连通。
