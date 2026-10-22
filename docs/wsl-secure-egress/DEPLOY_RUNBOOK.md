@@ -74,13 +74,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
    `/etc/cor-egress/profile.json` 恢复 Windows profile，校验 SHA256、
    schema、私钥结构和受保护 ACL。示例中的 `Ubuntu-22.04` 只是当前主机选择，
    不是强制发行版名称。
-3. 从 `target\debug` 与 Clash of Rust 安装根复制 `clash-of-rust.exe`、
+3. 只接受已通过 manifest、架构、资源、PE 版本和 dependency snapshot 校验
+   的 Windows x64 Release artifact。禁止从 `target\debug` 或未经校验的
+   `target\release` 目录部署。
+4. 从已验证 artifact 的 `payload` 复制 `clash-of-rust.exe`、
    `clash-tun-launcher.exe`、`clash-wsl-guardian.exe`、`LICENSE`、
-   `uninstall.exe`、`resources\mihomo.exe`。
-4. 从仓库 `scripts\wsl-secure-egress` 复制 `resources\wsl-secure-egress` 下的全部脚本
-   以及 `linux\` 与 `server\` 子目录。
-5. 逐个校验必需文件存在且可 OpenRead。
-6. 生成 manifest，执行 `Upgrade-Package.ps1` 的 Apply/Commit。
+   `resources\mihomo.exe` 及完整 `resources\wsl-secure-egress` 资源。
+5. 逐个校验必需文件存在且可 OpenRead，并记录 artifact commit、版本和
+   manifest SHA256。
+6. 生成受保护 staging manifest，执行 `Upgrade-Package.ps1` 的 Apply/Commit。
 7. 启动 broker 和 WireGuard，通过严格启动器确认近期 handshake、VPS 出口、
    DNS、IPv6 和 interop 负向检查。
 

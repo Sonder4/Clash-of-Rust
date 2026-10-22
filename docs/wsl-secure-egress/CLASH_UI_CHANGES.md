@@ -61,11 +61,11 @@ non-WSL application behavior unchanged.
 
 The current fetched upstream main is
 `2615ebc96f9f510802194727a6108bde73f4c8ed` (0.6.1). The last CI-verified fork
-head is `87ef6b2`, which contains upstream and is 73 commits ahead with zero
-commits behind. Later changes in the current worktree are not represented by
-that CI result. These changes retain the separate WSL backend and extend the
-UI/controller, packaging, recovery tests and documentation. Delivery remains
-the user's fork PR; no upstream PR is requested.
+head is `efa400d`, which contains upstream and is 79 commits ahead with zero
+commits behind. The compact-page and dependency-snapshot changes in the current
+worktree are not represented by that CI result. These changes retain the
+separate WSL backend and extend the UI/controller, packaging, recovery tests and
+documentation. Delivery remains the user's fork PR; no upstream PR is requested.
 
 ## Validation
 
@@ -73,15 +73,15 @@ The latest recorded development-tree checks passed 166 Windows unit, 244
 workflow, 21 elevation, 25 admin-job construction, 18 profile-restore, 70
 package-staging and 53 package-upgrade assertions. The Clash of WSL component
 passed 34 assertions and the tool-installer static regression passed 8 tests.
-The serial desktop binary suite passed 106 tests. `87ef6b2` also has a fully
-green GitHub CI run, but that run does not include the current uncommitted
-fixes. A parallel desktop run previously produced a 105/106 renderer race in
-one motion test; the failing test and a serial full run passed. UI and
-controller tests do not claim that a live WSL tunnel, VPS geography or cold
-boot has been executed.
+The serial desktop binary suite passed 107 tests. `efa400d` has a fully green
+GitHub CI run, but that run does not include the current uncommitted fixes. A
+parallel desktop run produced a 106/107 renderer race in one motion test; the
+serial full run passed 107/107. UI and controller tests do not claim that a
+live WSL tunnel, VPS geography or cold boot has been executed.
 
 The installed app remains 0.6.0 under `%ProgramFiles%\Clash of Rust` and is
 running. The source has incorporated upstream 0.6.1 but has not replaced this
 installed application. Historical 2026-10-18 UAC-controlled payload tests are not
 current online evidence. A successful source build is not a fresh GUI
-acceptance test, and the current profile is absent.
+acceptance test. The protected Windows profile is absent while its root-only
+Linux copy remains available for recovery.

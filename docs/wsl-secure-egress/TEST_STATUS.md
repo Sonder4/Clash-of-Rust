@@ -11,19 +11,19 @@ They do not describe the current host state.
 | Item | Current read-only evidence |
 | --- | --- |
 | Upstream | `2615ebc96f9f510802194727a6108bde73f4c8ed` |
-| Last CI-verified head | `8f158211e987ca60bc5075995991a1328a113f90` |
-| Branch relation | `0` behind, `78` ahead at `37dfafd` after the upstream fetch |
-| Current worktree | One committed build-verification change (`37dfafd`) and one pending test-contract update |
+| Last CI-verified head | `efa400d5aef47240d48b7022f89d9bf31a70c2dd` |
+| Branch relation | `0` behind, `79` ahead of `upstream/main` |
+| Current worktree | UI and dependency-snapshot verification changes pending commit and hosted CI |
 | Installed desktop | Clash of Rust 0.6.0 under `C:\Program Files\Clash of Rust` |
 | Source version | Upstream 0.6.1 synchronized; not installed over the 0.6.0 desktop |
 | `.wslconfig` | NAT, `localhostForwarding=false`, `dnsTunneling=false`, `autoProxy=false`, `firewall=true` |
 | Hyper-V WSL policy | Default inbound and outbound Block |
 | Endpoint exception | `ClashOfRust-WslEgress-Endpoint`, `Enabled=False` |
-| Windows profile | **MISSING** |
+| Windows profile | **MISSING**; a root-only Linux copy exists in Ubuntu-22.04 |
 | Broker state | `failed_closed_requested` |
 | Guardian service | Running / Automatic; this is not tunnel evidence |
+| Ubuntu 22.04 | Running; plain NAT `eth0`; DNS and `curl` fail |
 | Ubuntu 26.04 | Installed under `F:\WSL`, WSL2, currently stopped |
-| Ubuntu current network | Plain NAT `eth0`; DNS and `curl` fail |
 | Chrome / Codex CLI / Claude Code CLI / Claude Desktop | `NOT_RUN` on the current host |
 | Current VPS source and provider connections | `NOT_RUN` |
 | Strict-launcher visibility and interop checks | Plain-shell evidence only; strict live check `NOT_RUN` |
@@ -33,7 +33,40 @@ They do not describe the current host state.
 The current fail-closed state takes precedence over the historical
 2026-10-18 tunnel results below.
 
-### 2026-10-22 build-verification and snapshot-gate validation
+### 2026-10-22 final development-tree verification
+
+The following checks ran on the development tree after `efa400d`. These do not
+replace a hosted CI result for the eventual final commit.
+
+| Check | Actual result |
+| --- | --- |
+| `verify-build.py` against the downloaded `efa400d` Windows x64 artifact and matching dependency snapshot | PASS: `outcome=verified`, `0.6.1`, Windows x64, Release, 36 files |
+| `scripts/wsl-secure-egress/tests/verify-build-unit.py` | PASS, 4 tests |
+| `scripts/test-workflow-artifacts.py` | PASS, 6 tests after UTF-8 rerun; an initial Windows-console encoding run failed on `×` |
+| `scripts/test-build-tools.py` | PASS, 76 tests, 1 skipped after UTF-8 rerun; a first Windows path test failed |
+| Linux static and boot-guard suite | PASS, 87 tests |
+| VPS server validation | PASS, 24 tests |
+| VPS provisioning | PASS, 27 tests |
+| Windows offline broker suite | PASS, 166 assertions |
+| Windows offline workflow suite | PASS, 244 assertions |
+| Elevation unit suite | PASS, 21 assertions; UAC `NOT_RUN` |
+| Administrator argument-vector suite | PASS, 44 assertions; consent `NOT_RUN` |
+| Profile restore, Windows PowerShell 5.1 | PASS, 18 assertions |
+| Package staging | PASS, 75 assertions |
+| Package upgrade | PASS, 53 assertions |
+| Clash of WSL component | PASS, 34 assertions; live checks `NOT_RUN` |
+| `cargo test -p clash-of-rust --bin clash-of-rust --locked -- --test-threads=1` | PASS, 107/107 |
+| `cargo check -p clash-client-ui --locked` | PASS |
+| `cargo check -p clash-of-rust --bin clash-of-rust --locked` | PASS |
+| WSL runtime, VPS, model-vendor and Claude acceptance | `NOT_RUN` |
+| UAC transaction | `NOT_RUN` for the current development tree |
+
+The new verifier requires the separately downloaded CI dependency snapshot,
+checks its commit, baseline, constraints and file hashes, and checks the
+artifact's frozen `build_inputs` against it. It does not alter the worktree or
+substitute the checked-in lockfile for the resolved CI lockfile.
+
+### Earlier 2026-10-22 build-verification and snapshot-gate validation
 
 The following commands ran after the earlier staging work and before a new
 hosted CI result was available for the pending test-contract commit:

@@ -9,17 +9,16 @@ This comparison was checked on 2026-10-22:
 - User fork: `Sonder4/Clash-of-Rust`, PR #3, branch
   `fix/wsl-recovery-review-20261018`.
 - Last CI-verified fork head:
-  `8f158211e987ca60bc5075995991a1328a113f90`.
-- Graph relation at that head:
-  `git rev-list --left-right --count upstream/main...HEAD` returned `0 78`:
-  zero commits behind and 78 fork commits ahead at `37dfafd`.
+  `efa400d5aef47240d48b7022f89d9bf31a70c2dd`.
+- Current graph relation:
+  `git rev-list --left-right --count upstream/main...HEAD` returned `0 79`:
+  zero commits behind and 79 fork commits ahead.
 - Delivery target is the user's fork only. No upstream PR is authorized.
 
-The head `8f15821` has a successful GitHub `CI` workflow and a successful
+The head `efa400d` has a successful GitHub `CI` workflow and a successful
 `WSL Secure Egress` workflow. This proves the exact commit in those runs. The
-later `37dfafd` build-verification change and the pending snapshot-test
-contract update are not covered by that result until committed, pushed and
-run again.
+current UI and dependency-snapshot verification changes are not covered by
+that result until committed, pushed and run again.
 
 The initial WSL work began from an older upstream release. The feature branch
 was later synchronized with upstream 0.6.1 and then the fork-only code was
@@ -80,22 +79,23 @@ network components are not rewritten by the WSL feature.
 
 ## Pull request review matrix
 
-The review feedback contains eight independent issue groups represented by nine
-comments. The duplicate `prepared_for_reinstall` finding is one issue. The
-listed repairs have matching offline checks; the new-head CI column remains
-`Pending` until this development tree is committed, pushed and run.
+The review feedback contains seven independent issue groups represented by
+eight unresolved GitHub threads. The duplicate `prepared_for_reinstall` finding
+is one issue. The listed repairs have matching offline checks and were covered
+by the green `efa400d` CI; the current UI and verifier development changes still
+need a new hosted run.
 
 | Review issue | Repair | Offline evidence | New-head CI |
 | --- | --- | --- | --- |
-| Executed Install/Start needs a profile | Rust validation rejects empty profile and endpoint-only requests | Core/desktop tests | Pending |
-| Partial Windows install must roll back without Linux helper | Explicit partial-phase recovery and write-ahead state | Windows broker/workflow fixtures | Pending |
-| A restored generation can be reinstalled safely | Verified `restored` journal is archived, then a new generation starts | Windows unit/workflow fixtures | Pending |
-| Every managed distro needs a boot guard | Every configured role writes the shared default-drop guard | Linux static and boot-guard fixtures | Pending |
-| Fresh VPS unit may still be inactive | Pre-start activity check tolerates inactive status before `enable --now` | Provisioning suite | Pending |
-| `prepared_for_reinstall` must not enter adoption | Broker partial recovery, Rust report allowlist and UI state were extended | Rust and Windows workflow tests | Pending |
-| UI must retain restore-original-network | Danger-styled button dispatches `Rollback` with `restore-confirm` | Rust UI tests | Pending |
-| Restore failure must retain payload | Uninstall returns `blocked` before service or file removal | Isolated execute-path fixture is PASS | Pending |
-| Installation must register and start guardian | Execute path creates, starts and reads back the owned service | Isolated execute-path fixture is PASS | Pending |
+| Executed Install/Start needs a profile | Rust validation rejects empty profile and endpoint-only requests | Core/desktop tests | PASS at `efa400d` |
+| Partial Windows install must roll back without Linux helper | Explicit partial-phase recovery and write-ahead state | Windows broker/workflow fixtures | PASS at `efa400d` |
+| A restored generation can be reinstalled safely | Verified `restored` journal is archived, then a new generation starts | Windows unit/workflow fixtures | PASS at `efa400d` |
+| Every managed distro needs a boot guard | Every configured role writes the shared default-drop guard | Linux static and boot-guard fixtures | PASS at `efa400d` |
+| Fresh VPS unit may still be inactive | Pre-start activity check tolerates inactive status before `enable --now` | Provisioning suite | PASS at `efa400d` |
+| `prepared_for_reinstall` must not enter adoption | Broker partial recovery, Rust report allowlist and UI state were extended | Rust and Windows workflow tests | PASS at `efa400d` |
+| UI must retain restore-original-network | Danger-styled button dispatches `Rollback` with `restore-confirm` | Rust UI tests | PASS at `efa400d`; compact-page regression pending CI |
+| Restore failure must retain payload | Uninstall returns `blocked` before service or file removal | Isolated execute-path fixture is PASS | PASS at `efa400d` |
+| Installation must register and start guardian | Execute path creates, starts and reads back the owned service | Isolated execute-path fixture is PASS | PASS at `efa400d` |
 
 The administrator argument-vector regression now executes the elevation
 function against an isolated capture hook and verifies that paths containing
@@ -110,11 +110,12 @@ The last CI success does not imply deployment:
 
 | Item | Current state |
 | --- | --- |
-| Windows profile | Missing |
+| Windows profile | Missing; root-only Linux copy exists |
 | Hyper-V endpoint rule | Present, `Enabled=False` |
 | Broker phase | `failed_closed_requested` |
 | Guardian service | Running and Automatic |
-| Ubuntu 26.04 | NAT-only; DNS and HTTPS blocked |
+| Ubuntu 22.04 | Running, NAT-only; DNS and HTTPS blocked |
+| Ubuntu 26.04 | Installed under `F:\WSL`; stopped |
 | Current VPS source | `NOT_RUN` |
 | OpenAI, Anthropic, DeepSeek | `NOT_RUN` |
 | Chrome, Codex CLI, Claude Code CLI, Claude Desktop | `NOT_RUN` or not installed |
@@ -146,7 +147,7 @@ The latest development-tree results recorded in
 | VPS server | PASS, 24 tests |
 | VPS provisioning | PASS, 27 tests |
 | Tool installer static regression | PASS, 8 tests |
-| Desktop Rust binary, serial | PASS, 106/106 |
+| Desktop Rust binary, serial | PASS, 107/107 |
 
 An earlier parallel desktop run returned 105/106 because one motion test raced
 the shared headless renderer. The failing test passed alone and the complete

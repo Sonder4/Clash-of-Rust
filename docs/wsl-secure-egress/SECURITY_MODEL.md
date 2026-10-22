@@ -20,7 +20,8 @@ This section records operational status separately from the design guarantees:
 | Hyper-V endpoint | Matching UDP rule is present with `Enabled=False` |
 | Broker | `failed_closed_requested` |
 | Guardian service | `Running / Automatic`; not evidence of a tunnel |
-| Ubuntu 26.04 | NAT-only link; DNS and HTTPS unavailable |
+| Ubuntu 22.04 | Running with a NAT-only link; DNS and HTTPS unavailable |
+| Ubuntu 26.04 | Installed under `F:\WSL`; stopped |
 | VPS IPv4, tunnel DNS, IPv6 egress | `NOT_RUN` for the current generation |
 | OpenAI, Anthropic, DeepSeek | `NOT_RUN` for the current generation |
 | Chrome, Codex CLI, Claude Code CLI, Claude Desktop | `NOT_RUN` or not installed |

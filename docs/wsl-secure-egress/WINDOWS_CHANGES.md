@@ -73,8 +73,10 @@ the administrator job construction suite passed 25, profile restore passed 18,
 package staging passed 70 and package upgrade passed 53. The administrator job
 suite executes the local elevation function with an isolated sudo capture hook,
 so paths containing spaces remain one native argument without opening UAC.
-These are offline results for the uncommitted development tree. They do not
-modify production network policy and have not yet been confirmed by GitHub CI.
+These offline results also passed at `efa400d`, whose GitHub CI is green. The
+current UI and dependency-snapshot verification development changes have not
+yet been confirmed by a new hosted run. They do not modify production network
+policy.
 
 ## Package lifecycle
 

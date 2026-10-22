@@ -19,14 +19,19 @@ The current host is installed but deliberately disconnected:
 | Item | Current readback |
 | --- | --- |
 | Upstream baseline | `2615ebc` |
-| Last CI-verified branch head | `8f15821` (`0` behind and `78` ahead at `37dfafd`) |
-| Current worktree | Build verification is committed; its CI run is pending |
-| Windows WireGuard profile | `MISSING` at the protected Windows target |
+| Last CI-verified branch head | `efa400d` (`0` behind and `79` ahead of upstream) |
+| Current worktree | UI and dependency-snapshot verification changes awaiting final commit and CI |
+| Windows WireGuard profile | `MISSING` at the protected Windows target; root-only Linux copy exists |
 | Windows broker | `failed_closed_requested` |
 | Hyper-V endpoint exception | Present, `Enabled=False` |
 | Guardian service | `Running / Automatic`; this alone does not prove a tunnel |
-| Ubuntu 26.04 | NAT `eth0` only; DNS and `curl` are blocked |
+| Ubuntu 22.04 | Running, NAT `eth0` only; DNS and `curl` are blocked |
+| Ubuntu 26.04 | Installed under `F:\WSL`; currently stopped |
 | Chrome, Codex CLI, Claude Code CLI, Claude Desktop | `NOT_RUN`; not installed or not verified on this host |
+
+The `efa400d` CI and downloaded Windows x64 artifact are verified. That artifact
+cannot be deployed as a substitute for the final commit: the current UI and
+dependency-snapshot verification changes have not yet passed hosted CI.
 
 The 2026-10-18 live results are historical evidence for the exact revisions and
 payloads used then. They are not evidence that the tunnel is online now.

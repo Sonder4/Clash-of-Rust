@@ -74,7 +74,7 @@ this repair pass did not deploy or restart any real VPS service.
 ### Current host snapshot
 
 The current host snapshot records Ubuntu 22.04 running in NAT mode and Ubuntu
-26.04 stopped. The latest plain-shell Ubuntu 26.04 check observed `lo`, NAT
+26.04 stopped. The latest plain-shell Ubuntu 22.04 check observed `lo`, NAT
 `eth0 172.19.104.128/20`, and the NAT gateway. DNS resolution and
 `curl -4 https://ifconfig.co/ip` failed because the endpoint exception is
 disabled and the tunnel is not open. This is the expected fail-closed state.
