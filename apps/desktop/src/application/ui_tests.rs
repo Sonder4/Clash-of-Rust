@@ -246,13 +246,13 @@ fn wsl_native_buttons_dispatch_preview_and_busy_state_keeps_navigation_available
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
     // The compact WSL page exposes Status, install preflight and Test in its
-    // first action card. Leave recovery and configuration behind "高级".
+    // action row. Leave recovery and configuration behind "高级".
     let mut preflight_y = None;
     // Text metrics vary across platforms; probe the small first-row region,
     // not the full window, and never execute any recorded network intent.
     // Text ascent and card spacing depend on the renderer. Probe only the
     // action card and stop at the first matching install-preview intent.
-    for y in (320..620).step_by(8) {
+    for y in (180..620).step_by(8) {
         for x in (280..840).step_by(48) {
             events.borrow_mut().clear();
             ui_testing::click(window.window(), x as f32, y as f32);
@@ -280,6 +280,15 @@ fn wsl_native_buttons_dispatch_preview_and_busy_state_keeps_navigation_available
     ui_testing::click(window.window(), 65.0, 156.0);
     assert_eq!(events.borrow().last().unwrap().0, Intent::Navigate);
     window.hide().unwrap();
+}
+
+#[test]
+fn wsl_compact_page_retains_explicit_restore_confirmation_entry() {
+    let source = include_str!("../../../../crates/client-ui/ui/pages/wsl.slint");
+    assert!(source.contains("text: \"恢复原网络\""));
+    assert!(source.contains("action: \"Rollback\""));
+    assert!(source.contains("mode: \"restore-confirm\""));
+    assert!(source.contains("danger: true"));
 }
 
 #[test]

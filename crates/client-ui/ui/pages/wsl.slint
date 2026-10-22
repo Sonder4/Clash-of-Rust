@@ -2,12 +2,16 @@ import { ScrollView } from "std-widgets.slint";
 import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
-import { Label, Caption, Heading, Paragraph, ContentPanel, ActionButton, Field, Badge, Divider } from "../components/controls.slint";
+import { Label, Caption, Heading, Paragraph, ContentPanel, RowPanel, ActionButton, Field, Badge, Divider } from "../components/controls.slint";
 
 component WslActionButton inherits ActionButton {
     in property <string> action;
     in property <string> mode: "execute";
+    in property <string> label: "";
     enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting;
+    accessible-role: button;
+    accessible-label: root.label == "" ? root.text : root.label;
+    accessible-action-default => { if root.enabled && !root.busy && UiData.modal == 0 { root.clicked(); } }
     clicked => { UiActions.dispatch(Intent.wsl-action, root.action, root.mode); }
 }
 
@@ -18,19 +22,19 @@ component WslField inherits Field {
     edited(value) => { UiActions.dispatch(Intent.wsl-input, root.argument, value); }
 }
 
-component StatusRow inherits Rectangle {
+component StatusMetric inherits Rectangle {
     in property <string> title;
     in property <string> value;
-    in property <bool> highlight: false;
-    height: 26px;
-    HorizontalLayout {
-        cross-axis-alignment: center;
-        spacing: Theme.content-gap;
-        Caption { text: root.title; horizontal-stretch: 1; }
+    in property <int> tone: 4;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    height: content.preferred-height;
+    content := VerticalLayout {
+        spacing: 4px;
+        Caption { text: root.title; }
         Label {
             text: root.value;
-            horizontal-alignment: right;
-            color: root.highlight ? Theme.accent : Theme.secondary;
+            color: root.tone == 1 ? Theme.success : root.tone == 2 ? Theme.warning : root.tone == 3 ? Theme.danger : Theme.ink;
         }
     }
 }
@@ -46,47 +50,76 @@ export component WslPage inherits PageSurface {
             padding-right: Theme.content-gap;
             padding-bottom: Theme.card-padding;
             spacing: Theme.page-gap;
-            ContentPanel {
-                HorizontalLayout {
-                    cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Heading { text: "Clash of WSL"; horizontal-stretch: 1; }
-                    Badge {
-                        text: UiData.wsl-busy ? "处理中" : UiData.wsl-tunnel == "connected" ? "已连接" : UiData.wsl-status == "blocked" ? "受阻" : UiData.wsl-status == "failed" ? "失败" : "未连接";
-                        tone: UiData.wsl-tunnel == "connected" ? 1 : UiData.wsl-busy ? 2 : 3;
-                    }
+            RowPanel {
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+                    Heading { text: "Clash of WSL"; }
+                    Caption { text: "德国出口 · " + UiData.wsl-exit; }
                 }
-                HorizontalLayout {
-                    cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Caption { text: "出口 IP"; horizontal-stretch: 1; }
-                    Label { text: UiData.wsl-exit; color: Theme.accent; horizontal-alignment: right; }
-                    Caption { text: "阶段"; }
-                    Label { text: UiData.wsl-phase; horizontal-alignment: right; }
+                Badge {
+                    text: UiData.wsl-busy ? "处理中" : UiData.wsl-tunnel == "connected" ? "已连接" : UiData.wsl-status == "blocked" ? "受阻" : UiData.wsl-status == "failed" ? "失败" : "未连接";
+                    tone: UiData.wsl-tunnel == "connected" ? 1 : UiData.wsl-busy ? 2 : 3;
                 }
-                Divider { }
-                StatusRow { title: "保护"; value: UiData.wsl-protection; }
-                StatusRow { title: "验收"; value: UiData.wsl-functional; }
-                if UiData.wsl-message != "": Paragraph { text: UiData.wsl-message; color: Theme.secondary; }
-                if UiData.wsl-guidance != "": Paragraph { text: UiData.wsl-guidance; color: Theme.warning; }
+            }
+            RowPanel {
+                StatusMetric {
+                    title: "隧道";
+                    value: UiData.wsl-tunnel;
+                    tone: UiData.wsl-tunnel == "connected" ? 1 : 4;
+                }
+                Rectangle { width: 1px; height: 42px; background: Theme.subtle-line; }
+                StatusMetric {
+                    title: "保护";
+                    value: UiData.wsl-protection;
+                    tone: UiData.wsl-protection == "verified" ? 1 : UiData.wsl-protection == "blocked" ? 3 : 2;
+                }
+                Rectangle { width: 1px; height: 42px; background: Theme.subtle-line; }
+                StatusMetric {
+                    title: "验收";
+                    value: UiData.wsl-functional;
+                    tone: UiData.wsl-functional == "PASS" ? 1 : UiData.wsl-functional == "FAIL" ? 3 : 2;
+                }
+            }
+            if UiData.wsl-guidance != "": ContentPanel {
+                Paragraph { text: UiData.wsl-guidance; color: Theme.warning; }
+            }
+            if UiData.wsl-guidance == "" && UiData.wsl-message != "": ContentPanel {
+                Paragraph { text: UiData.wsl-message; color: Theme.secondary; }
             }
             ContentPanel {
-                HorizontalLayout { cross-axis-alignment: center;
+                HorizontalLayout {
+                    cross-axis-alignment: center;
                     spacing: Theme.content-gap;
-                    if !UiData.wsl-installed: WslActionButton { text: "安装并保护"; action: "Install"; primary: true; }
+                    if !UiData.wsl-installed: WslActionButton { text: "安装"; action: "Install"; primary: true; }
                     if UiData.wsl-installed: WslActionButton { text: "连接"; action: "Start"; primary: true; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
                     if UiData.wsl-installed: WslActionButton { text: "断开"; action: "Stop"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
                     WslActionButton { text: "状态"; action: "Status"; mode: "preview"; }
                     WslActionButton { text: "测试"; action: "Test"; mode: "preview"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting && UiData.wsl-installed; }
                     WslActionButton { text: "预检"; action: "Install"; mode: "preview"; }
-                    ActionButton { text: root.advanced-open ? "收起" : "高级"; clicked => { root.advanced-open = !root.advanced-open; } }
+                    ActionButton {
+                        text: root.advanced-open ? "收起" : "高级";
+                        accessible-role: button;
+                        accessible-label: root.advanced-open ? "收起高级设置" : "打开高级设置";
+                        clicked => { root.advanced-open = !root.advanced-open; }
+                    }
                 }
                 if root.advanced-open: VerticalLayout {
                     spacing: Theme.content-gap;
+                    Divider { }
+                    Caption {
+                        text: UiData.wsl-deployed-backend + " · " + UiData.wsl-phase + " · generation " + UiData.wsl-generation;
+                    }
                     HorizontalLayout {
                         spacing: Theme.content-gap;
                         if UiData.wsl-installed: WslActionButton { text: "保留保护断开"; action: "Rollback"; mode: "execute"; }
-                        if UiData.wsl-installed: WslActionButton { text: "恢复原网络"; action: "Rollback"; mode: "restore-confirm"; danger: true; }
+                        if UiData.wsl-installed: WslActionButton {
+                            text: "恢复原网络";
+                            label: "恢复原网络并撤销保护";
+                            action: "Rollback";
+                            mode: "restore-confirm";
+                            danger: true;
+                        }
                         ActionButton { text: root.logs-open ? "收起日志" : "日志"; clicked => { root.logs-open = !root.logs-open; } }
                     }
                     if !UiData.wsl-installed: HorizontalLayout {
@@ -102,7 +135,10 @@ export component WslPage inherits PageSurface {
                         WslField { text <=> UiData.wsl-profile-path; argument: "profile-path"; placeholder: "私密配置 JSON"; }
                         WslActionButton { text: "浏览…"; action: "ChooseProfile"; mode: "preview"; }
                     }
-                    if UiData.wsl-admin-command != "": Paragraph { text: UiData.wsl-admin-command; font-size: Theme.detail-size; color: Theme.secondary; }
+                    if UiData.wsl-admin-command != "": Caption {
+                        text: UiData.wsl-admin-command;
+                        overflow: elide;
+                    }
                 }
             }
             ContentPanel {
@@ -114,6 +150,15 @@ export component WslPage inherits PageSurface {
                     Caption { text: distro.name; horizontal-stretch: 1; }
                     Caption { text: distro.coverage; horizontal-stretch: 0; color: Theme.secondary; }
                     Label { text: distro.state; width: 72px; horizontal-stretch: 0; horizontal-alignment: right; color: Theme.secondary; }
+                }
+            }
+            if root.advanced-open && UiData.wsl-checks.length > 0: ContentPanel {
+                Heading { text: "检查"; }
+                for check in UiData.wsl-checks: HorizontalLayout {
+                    cross-axis-alignment: center;
+                    spacing: Theme.content-gap;
+                    Caption { text: check.label; horizontal-stretch: 1; }
+                    Label { text: check.value; horizontal-alignment: right; color: Theme.secondary; }
                 }
             }
             if root.logs-open: ContentPanel {
