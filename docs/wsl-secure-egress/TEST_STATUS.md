@@ -633,6 +633,16 @@ written. Every live deployment, tunnel, provider, Claude, interop, cold-boot,
 network-switch, rollback, uninstall and reinstall item remains `NOT_RUN` until
 authoritative evidence is collected.
 
+The first hosted run on `8f97926` failed in `restore-profile-unit.ps1` because
+the regression depended on the local machine having a real root-owned WSL
+profile. That dependency was replaced with a native, process-local synthetic
+profile fixture. The preview path still executes the production script's
+ProcessStartInfo read, SHA256 validation and schema validation; it transfers
+the fixture on stdout and never writes the Windows target. The corrected test
+passes 18 assertions under Windows PowerShell 5.1, including with no real
+profile available. The hosted run remains pending until the repaired commit is
+pushed.
+
 ## 2026-10-18 follow-up repair and recovery attempt (current session)
 
 This entry records only commands actually executed in the resumed session.

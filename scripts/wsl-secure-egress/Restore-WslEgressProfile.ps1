@@ -16,6 +16,7 @@ param(
     [string]$ProfilePath = "$env:LOCALAPPDATA\ClashOfRust\WslEgress\profile.json",
     [string]$SourceDistro = 'Ubuntu-22.04',
     [string]$ExpectedSha256 = '9DA000C7399DE02A675C18AE929356DDC5F6072ABA9169E4BE84A85519A397F7',
+    [string]$WslExecutable = (Join-Path $env:SystemRoot 'System32\wsl.exe'),
     [switch]$Execute
 )
 
@@ -39,9 +40,9 @@ function Get-Sha256Bytes([byte[]]$Bytes) {
     }
 }
 
-function Read-LinuxProfile([string]$Distro) {
+function Read-LinuxProfile([string]$Distro, [string]$Executable) {
     $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = Join-Path $env:SystemRoot 'System32\wsl.exe'
+    $start.FileName = $Executable
     # Windows PowerShell 5.1 cannot consume ProcessStartInfo.ArgumentList.
     # Each fixed argument is already a validated single token, so a quote-free
     # command line is sufficient and does not expose the profile.
@@ -185,7 +186,7 @@ function Write-ProtectedProfile([string]$Target, [byte[]]$Bytes) {
 }
 
 try {
-    $bytes = Read-LinuxProfile $SourceDistro
+    $bytes = Read-LinuxProfile $SourceDistro $WslExecutable
     $actual = Get-Sha256Bytes $bytes
     if ($actual -ne $ExpectedSha256) {
         throw 'The installed Linux profile does not match the approved SHA256.'
