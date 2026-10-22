@@ -129,8 +129,78 @@ try {
     try { Assert-PackageManifest $fixture.source $manifest ('0' * 64) } catch { $blocked = $true }
     Assert-Equal $blocked $true 'changed manifest rejected against approved digest'
 
-    [ordered]@{ suite='package-upgrade-offline'; result='PASS'; assertions=$testCount
-        services_modified=$false; network_tests='NOT_RUN'; wsl_started=$false } | ConvertTo-Json -Compress
+    # Run the actual -File entry point in a child process. Only the privileged
+    # ACL/transaction functions are replaced; parsing, argument binding,
+    # manifest generation, digest pinning and path handoff remain production code.
+    $fixture = New-Fixture 'entry-point'
+    $entrySource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../Upgrade-Package.ps1'))
+    $tokens = $null
+    $parseErrors = $null
+    $entryAst = [Management.Automation.Language.Parser]::ParseInput($entrySource, [ref]$tokens, [ref]$parseErrors)
+    Assert-Equal @($parseErrors).Count 0 'upgrade entry point parses'
+    $replacements = @{
+        'Protect-PackageDirectory' = 'function Protect-PackageDirectory([string]$Path) {}'
+        'Invoke-PackageUpgrade' = @'
+function Invoke-PackageUpgrade {
+    param([string]$Operation, [string]$Destination, [string]$Source,
+        [string]$ApprovedManifest, [string]$ApprovedDigest)
+    if ($Operation -ne 'Apply') { throw 'Unexpected offline operation.' }
+    Assert-PackageManifest $Source $ApprovedManifest $ApprovedDigest
+    [IO.File]::WriteAllText((Join-Path ([IO.Path]::GetDirectoryName($ApprovedManifest)) 'entry-receipt.json'),
+        ([ordered]@{ manifest=$ApprovedManifest; digest=$ApprovedDigest } | ConvertTo-Json -Compress))
+}
+'@
+    }
+    $definitions = @($entryAst.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $replacements.ContainsKey($node.Name)
+    }, $true) | Sort-Object { $_.Extent.StartOffset } -Descending)
+    Assert-Equal $definitions.Count 2 'only privileged entry dependencies replaced'
+    foreach ($definition in $definitions) {
+        $entrySource = $entrySource.Substring(0, $definition.Extent.StartOffset) +
+            $replacements[$definition.Name] + $entrySource.Substring($definition.Extent.EndOffset)
+    }
+    $entryScript = Join-Path $fixture.root 'entry.ps1'
+    [IO.File]::WriteAllText($entryScript, $entrySource, (New-Object Text.UTF8Encoding($false)))
+    $powershell = (Get-Process -Id $PID).Path
+    $manifest = Join-Path $fixture.root 'entry-manifest.json'
+    $receipt = Join-Path $fixture.root 'entry-receipt.json'
+    $output = & $powershell -NoLogo -NoProfile -NonInteractive -File $entryScript `
+        -Action CreateManifest -PackagePath $fixture.source -ManifestPath $manifest
+    Assert-Equal $LASTEXITCODE 0 'installer manifest entry succeeds'
+    $manifestHash = [string]$output
+    Assert-Equal ($manifestHash -match '^[0-9A-F]{64}$') $true 'manifest entry emits a bare SHA256'
+    Assert-Equal $manifestHash (Get-PackageHash $manifest) 'manifest digest pins the emitted file'
+    $output = & $powershell -NoLogo -NoProfile -NonInteractive -File $entryScript `
+        -Action Apply -InstallationPath $fixture.target -PackagePath $fixture.source
+    Assert-Equal $LASTEXITCODE 1 'Apply entry refuses missing manifest arguments'
+    Assert-Equal ([IO.File]::Exists($receipt)) $false 'missing approval never reaches transaction'
+    $output = & $powershell -NoLogo -NoProfile -NonInteractive -File $entryScript `
+        -Action Apply -InstallationPath $fixture.target -PackagePath $fixture.source `
+        -ManifestPath $manifest -ExpectedManifestSha256 $manifestHash
+    Assert-Equal $LASTEXITCODE 0 'Apply entry hands a manifest path to transaction'
+    Assert-Equal (($output | ConvertFrom-Json).outcome) 'succeeded' 'Apply entry reports success'
+    $entryReceipt = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
+    Assert-Equal $entryReceipt.manifest $manifest 'transaction receives the file path rather than parsed JSON'
+    Assert-Equal $entryReceipt.digest $manifestHash 'transaction receives the pinned digest'
+    [IO.File]::WriteAllText((Join-Path $fixture.source 'LICENSE'), 'changed-after-installer-manifest')
+    $output = & $powershell -NoLogo -NoProfile -NonInteractive -File $entryScript `
+        -Action Apply -InstallationPath $fixture.target -PackagePath $fixture.source `
+        -ManifestPath $manifest -ExpectedManifestSha256 $manifestHash
+    Assert-Equal $LASTEXITCODE 1 'Apply entry rejects bytes changed after installer manifest'
+    $output = & $powershell -NoLogo -NoProfile -NonInteractive -File $entryScript `
+        -Action Apply -InstallationPath $fixture.target -PackagePath $fixture.source `
+        -ManifestPath $manifest -ExpectedManifestSha256 ('0' * 64)
+    Assert-Equal $LASTEXITCODE 1 'Apply entry rejects an incorrect approved digest'
+    $installer = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../../installer/clash-of-rust.nsi'))
+    Assert-Equal ($installer -match '-Action CreateManifest .*?-ManifestPath "\$UpdateManifest"') `
+        $true 'installer creates the extracted-package manifest'
+    Assert-Equal ($installer -match '-Action Apply .*?-ManifestPath "\$UpdateManifest" -ExpectedManifestSha256 "\$UpdateManifestHash"') `
+        $true 'installer Apply carries both manifest approval arguments'
+
+    $result = [ordered]@{ suite='package-upgrade-offline'; result='PASS'; assertions=$testCount
+        services_modified=$false; network_tests='NOT_RUN'; wsl_started=$false }
 } finally {
     if (Test-Path Function:\Copy-Item) { Remove-Item Function:\Copy-Item }
     $resolved = [IO.Path]::GetFullPath($testRoot)
@@ -140,3 +210,5 @@ try {
     }
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
+$result | ConvertTo-Json -Compress
+exit 0

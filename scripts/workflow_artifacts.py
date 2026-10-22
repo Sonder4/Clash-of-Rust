@@ -120,7 +120,7 @@ def export_build(system, arch, tests, output, binaries=None):
     return archive
 
 
-def verify_build(root, system, arch, expected_commit):
+def verify_build(root, system, arch, expected_commit, dependency_snapshot=None):
     if system == 'android':
         from android import verify_build as verify_android
         return verify_android(root, arch, expected_commit)
@@ -129,11 +129,30 @@ def verify_build(root, system, arch, expected_commit):
         manifest.get('system'), manifest.get('arch'), manifest.get('profile')) != (
             BUILD_SCHEMA, expected_commit, package_version(), system, arch, 'release'):
         raise ValueError('Build metadata does not match the selected source and platform')
-    if manifest.get('cargo_lock_sha256') != sha256(ROOT/'Cargo.lock'):
-        raise ValueError('Build dependency lockfile differs from the selected source')
-    from build_inputs import manifest as input_manifest
-    if snapshot := input_manifest():
-        frozen = manifest.get('build_inputs', {})
+    frozen = manifest.get('build_inputs', {})
+    if dependency_snapshot is None:
+        if manifest.get('cargo_lock_sha256') != sha256(ROOT/'Cargo.lock'):
+            raise ValueError('Build dependency lockfile differs from the selected source')
+        from build_inputs import manifest as input_manifest
+        snapshot = input_manifest()
+    else:
+        snapshot_path = Path(dependency_snapshot).resolve(strict=True)/'inputs.json'
+        if snapshot_path.is_symlink() or not snapshot_path.is_file():
+            raise ValueError('Dependency snapshot manifest is missing')
+        snapshot = json.loads(snapshot_path.read_text(encoding='utf-8'))
+        files = snapshot.get('files', {})
+        if (snapshot.get('schema'), snapshot.get('commit')) != (1, expected_commit):
+            raise ValueError('Dependency snapshot metadata does not match the selected source')
+        if not isinstance(files, dict) or not files or set(files) != set(frozen.get('files', {})):
+            raise ValueError('Dependency snapshot file set is incomplete')
+        for relative, checksum in files.items():
+            path = snapshot_path.parent/relative
+            if (not safe_name(relative) or path.is_symlink() or not path.is_file()
+                    or sha256(path) != checksum):
+                raise ValueError('Dependency snapshot checksum mismatch: '+relative)
+        if manifest.get('cargo_lock_sha256') != files.get('Cargo.lock'):
+            raise ValueError('Build dependency lockfile differs from the dependency snapshot')
+    if snapshot:
         if any(frozen.get(key) != snapshot.get(key) for key in ('commit', 'baseline', 'constraints', 'files')):
             raise ValueError('Build dependency snapshot differs from the verified CI')
     records = manifest['files']

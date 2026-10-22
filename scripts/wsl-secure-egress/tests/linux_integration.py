@@ -28,7 +28,8 @@ import time
 
 
 HERE = Path(__file__).resolve()
-MANAGER = HERE.parents[1] / "linux" / "manager.py"
+MANAGER_SOURCE = HERE.parents[1] / "linux" / "manager.py"
+MANAGER_PATH = Path("/run/cor-egress-integration-manager.py")
 VPS = "cor-egress-fixture-vps"
 GATEWAY = "cor-egress-gw"
 TRANSPORT = "cor-egress-transport"
@@ -286,20 +287,34 @@ def command(args, *, namespace=None, check=True, input=None, timeout=30):
                             capture_output=True, timeout=timeout)
     if check and result.returncode:
         # Never echo command arguments or manager output: either could contain keys.
+        if os.environ.get("COR_EGRESS_TEST_DEBUG") == "1":
+            # Synthetic fixture commands contain no credentials. Keep default
+            # output redacted, but make environment/capability failures
+            # diagnosable without changing the command wrapper.
+            raise Failure(
+                f"{Path(str(args[0])).name} failed (exit {result.returncode}); "
+                f"argv={list(map(str, args))!r}; "
+                f"namespace={namespace!r}; stderr={result.stderr[-1000:]!r}")
         raise Failure(f"{Path(str(args[0])).name} failed (exit {result.returncode})")
     return result
 
 
 def private_mounts() -> None:
     command(["mount", "--make-rprivate", "/"])
+    # Stage the already-validated source before /var/lib and /mnt are hidden
+    # by private tmpfs mounts in the isolated mount namespace.
     # Do not let manager writes reach runner /etc, /run, persistent state or logs.
     files = {}
     for name in ("passwd", "group", "nsswitch.conf", "hosts", "os-release"):
         path = Path("/etc") / name
         if path.is_file():
             files[name] = path.read_bytes()
+    # Read the repository manager before /mnt is hidden by private tmpfs.
+    manager_source = MANAGER_SOURCE.read_bytes()
     for target in ("/run", "/etc", "/var/lib", "/var/log", "/mnt"):
         command(["mount", "-t", "tmpfs", "-o", "mode=0755,nosuid,nodev", "tmpfs", target])
+    MANAGER_PATH.write_bytes(manager_source)
+    MANAGER_PATH.chmod(0o700)
     for name, content in files.items():
         (Path("/etc") / name).write_bytes(content)
     Path("/etc/resolv.conf").write_text(f"nameserver {RESOLVER}\noptions timeout:1 attempts:1\n")
@@ -330,7 +345,7 @@ class Fixture:
         rootprivate(Path("/etc/wsl.conf"), self.original_wsl.decode())
 
     def manager_argv(self, action):
-        return [sys.executable, "-I", MANAGER, action, "--profile", self.profile,
+        return [sys.executable, "-I", MANAGER_PATH, action, "--profile", self.profile,
                 "--generation", str(GENERATION)]
 
     def attest(self, **overrides):
@@ -755,7 +770,7 @@ table inet cor_fixture_observe {
     def manager_rule_compatibility(self):
         """Compare independent kernel JSON against the manager's ownership matcher."""
         import importlib.util
-        spec = importlib.util.spec_from_file_location("cor_kernel_rules", MANAGER)
+        spec = importlib.util.spec_from_file_location("cor_kernel_rules", MANAGER_PATH)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         instance = object.__new__(module.Manager)
@@ -942,17 +957,27 @@ def main(argv=None):
     parser.add_argument("--_isolated-parent", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     execution_gate(args.execute_isolated)
-    require(MANAGER.is_file(), "linux/manager.py is required")
+    require(MANAGER_SOURCE.is_file(), "linux/manager.py is required")
     require(Path(PAYLOAD_PYTHON).is_file(), "CI requires /usr/bin/python3 for sandbox workloads")
     for tool in ("unshare", "mount", "ip", "nft", "wg", "bwrap", "setpriv", "sysctl"):
         require(shutil.which(tool) is not None, f"missing CI dependency: {tool}")
     if args._isolated_parent is None:
         # First and only kernel operation in the launcher: enter fresh isolation.
-        return subprocess.run([
+        launcher_code = (
+            "import os, sys\n"
+            "os.execv(sys.executable, [sys.executable, '-I', sys.argv[1], "
+            "'--execute-isolated', '--_isolated-parent=' + sys.argv[2]])\n"
+        )
+        child = subprocess.run([
             "unshare", "--net", "--mount", "--pid", "--fork", "--mount-proc",
-            "--kill-child=SIGKILL", sys.executable, str(HERE), "--execute-isolated",
-            "--_isolated-parent", json.dumps(namespace_ids()),
-        ], check=False, timeout=420).returncode
+            "--kill-child=SIGKILL", sys.executable, "-I", "-c", launcher_code,
+            str(HERE),
+            json.dumps(namespace_ids()),
+        ], check=False, timeout=420)
+        require(child.returncode == 0,
+                f"isolated child failed (exit {child.returncode}); "
+                "launcher recognizes only the initialized mount-namespace pass")
+        return child.returncode
     verify_child(json.loads(args._isolated_parent))
     private_mounts()
     fixture = Fixture()
@@ -975,6 +1000,11 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except (Failure, OSError, subprocess.SubprocessError, ValueError) as error:
         # Do not dump subprocess args, profiles, keys or receiver logs on failure.
-        print(f"FAIL: {type(error).__name__}: "
-              + (str(error) if isinstance(error, Failure) else "isolated harness failed"), file=sys.stderr)
+        if isinstance(error, Failure):
+            detail = str(error)
+        elif os.environ.get("COR_EGRESS_TEST_DEBUG") == "1":
+            detail = f"{error} (debug: message only)"
+        else:
+            detail = "isolated harness failed"
+        print(f"FAIL: {type(error).__name__}: {detail}", file=sys.stderr)
         raise SystemExit(1)

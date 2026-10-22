@@ -5,11 +5,24 @@ the separate WSL Secure Egress backend.
 
 ## UI
 
-The WSL page exposes Doctor, Status, installation preflight, Install, Connect,
-Disconnect while retaining protection, Test, Rollback and Restore Original
-Network. It displays operation identity, generation, backend, endpoint state,
-per-distro coverage, bounded logs and explicit `PASS`, `FAIL`, `BLOCKED` and
-`NOT_RUN` results.
+The condensed WSL page exposes:
+
+- **安装** when the component is not installed;
+- **连接**, **断开**, **状态**, **测试**, **预检** and **日志**;
+- **断开并保留保护** for a non-destructive transport stop;
+- **恢复原网络** as a danger-styled action that requires separate confirmation.
+
+The install form appears only while the component is not installed, and the
+page displays endpoint, phase, protection, acceptance and bounded logs using
+the shared page components. Test and status results continue to distinguish
+`PASS`, `FAIL`, `BLOCKED` and `NOT_RUN`.
+
+The page is intentionally compact. Its first card shows transport, exit and
+protection status; the second keeps the primary connect/install action plus
+read-only Status, Test and preflight; endpoint/profile fields, logs and the two
+recovery actions are disclosed through **高级**. This follows the existing
+network and diagnostic pages while preserving an explicit danger-styled
+**恢复原网络** confirmation action.
 
 Endpoint IPv4 and port are visible configuration fields, but they do not replace
 the private WireGuard profile. Executed Install and Start requests require a
@@ -27,6 +40,11 @@ fields alone cannot satisfy the install/start profile requirement, and explicit
 endpoint, port, distro or backend overrides must agree with the protected
 configuration.
 
+The `prepared_for_reinstall` phase is retained as a known protected
+non-functional state. It keeps the deployment and recovery controls visible so
+the component is not mistaken for a fully installed manager or allowed to enter
+the adoption path.
+
 The controller owns no Linux routes, nftables tables, WireGuard keys or
 Hyper-V objects. It consumes structured reports from the broker and ignores
 stale operation results after reconnect, reconfiguration or rollback.
@@ -41,19 +59,29 @@ in [UPSTREAM_COMPARISON.md](UPSTREAM_COMPARISON.md); the fork's official update
 channel is deliberately disabled, so it would be inaccurate to call all
 non-WSL application behavior unchanged.
 
-The last upstream revision included in HEAD is `a27d154`, merged by `1eed8b3`.
-The refreshed upstream main is `37683750b37be9d2bbcfb22804bec96174e14af5`;
-its contributor-documentation commit has not yet been merged at this writing.
-No upstream PR is requested.
+The current fetched upstream main is
+`2615ebc96f9f510802194727a6108bde73f4c8ed` (0.6.1). The last CI-verified fork
+head is `efa400d`, which contains upstream and is 79 commits ahead with zero
+commits behind. The compact-page and dependency-snapshot changes in the current
+worktree are not represented by that CI result. These changes retain the
+separate WSL backend and extend the UI/controller, packaging, recovery tests and
+documentation. Delivery remains the user's fork PR; no upstream PR is requested.
 
 ## Validation
 
-Executed release Rust checks passed 27 WSL core tests and 27 desktop WSL tests.
-PowerShell fixtures passed 125 Windows unit, 96 workflow, 21 elevation and 38
-package-upgrade assertions. UI and controller tests do not claim that a live
-WSL tunnel, VPS geography or cold boot has been executed.
+The latest recorded development-tree checks passed 166 Windows unit, 244
+workflow, 21 elevation, 25 admin-job construction, 18 profile-restore, 70
+package-staging and 53 package-upgrade assertions. The Clash of WSL component
+passed 34 assertions and the tool-installer static regression passed 8 tests.
+The serial desktop binary suite passed 107 tests. `efa400d` has a fully green
+GitHub CI run, but that run does not include the current uncommitted fixes. A
+parallel desktop run produced a 106/107 renderer race in one motion test; the
+serial full run passed 107/107. UI and controller tests do not claim that a
+live WSL tunnel, VPS geography or cold boot has been executed.
 
-The actual installed app remains 0.6.0 under `%ProgramFiles%\Clash of Rust`
-and is running. A successful source build is not an installed application
-upgrade or a fresh GUI acceptance test; the repaired source has not replaced
-the installed binary.
+The installed app remains 0.6.0 under `%ProgramFiles%\Clash of Rust` and is
+running. The source has incorporated upstream 0.6.1 but has not replaced this
+installed application. Historical 2026-10-18 UAC-controlled payload tests are not
+current online evidence. A successful source build is not a fresh GUI
+acceptance test. The protected Windows profile is absent while its root-only
+Linux copy remains available for recovery.

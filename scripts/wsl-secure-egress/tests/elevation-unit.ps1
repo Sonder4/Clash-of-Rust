@@ -76,3 +76,4 @@ foreach ($frame in @(
     network = 'NOT_RUN'
     wsl_started = $false
 } | ConvertTo-Json -Compress
+exit 0

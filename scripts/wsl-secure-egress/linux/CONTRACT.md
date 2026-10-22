@@ -6,9 +6,13 @@ this file. Linux kernel integration is explicitly gated to disposable CI.
 
 ## Payload preparation
 
-The user supplies the existing `COR-Egress` rootfs. No automatic download/import.
-It must provide Python 3, iproute2, nftables, kernel WireGuard support,
-wireguard-tools, util-linux (`setpriv`) and bubblewrap supporting `--disable-userns`.
+The profile names the existing ordinary WSL distribution, such as
+`Ubuntu-22.04` or `Ubuntu-26.04`. No specially named dedicated image is
+required and no rootfs is downloaded or imported.
+The selected distribution must provide Python 3, iproute2, nftables, kernel
+WireGuard support, wireguard-tools, util-linux (`setpriv`) and bubblewrap.
+`--disable-userns` is optional when the helper's seccomp filter provides the
+required namespace restriction.
 The distro must permit mount/PID/IPC/user namespaces. No packages are fetched by
 the helper. WireGuard kernel support must already be available.
 
@@ -38,7 +42,7 @@ orchestration fields may accompany the Linux fields.
 {
   "schema": 1,
   "backend": "WireGuard",
-  "manager_distro": "COR-Egress",
+  "manager_distro": "Ubuntu-26.04",
   "endpoint_ipv4": "192.0.2.2",
   "endpoint_port": 51820,
   "private_key": null,
@@ -63,7 +67,7 @@ VM remains outside this Linux coverage.
 ## Calls and order
 
 The fixed executable is `/usr/local/lib/cor-egress/manager`. Windows uses
-`wsl.exe -d COR-Egress -u root --exec <helper> <action> ...`. All actions accept
+`wsl.exe -d <manager_distro> -u root --exec <helper> <action> ...`. All actions accept
 `--profile /etc/cor-egress/profile.json --generation N`. **Keep installation
 generation N stable across start/stop**. A mismatch blocks the action.
 
@@ -75,7 +79,7 @@ generation N stable across start/stop**. A mismatch blocks the action.
    default deny **before** touching DNS or configuring network interfaces.
    Existing profile/table/namespace ownership is never assumed. No transport
    exception is created at installation. Shared `eth0` is never moved.
-3. In **each other distro**, install the same trusted payload then invoke
+3. In **each other managed distro**, install the same trusted payload then invoke
    `configure --generation N` with the same profile stdin. It owns only local
    `/etc/wsl.conf` (disable generated resolver, generated hosts and Windows
    interop), `/etc/resolv.conf` (fixed tunnel resolver) and `/etc/hosts`

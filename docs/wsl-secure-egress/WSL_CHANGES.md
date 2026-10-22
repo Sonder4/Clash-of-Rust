@@ -66,17 +66,57 @@ PR review comment 5 concerns the separate `prepare-vps.py` provisioning tool.
 A newly copied systemd unit can legitimately return inactive (exit 3) before
 `enable --now`. Its pre-start activity query now reads `subprocess.run`'s
 return code without treating inactivity as a fatal provisioning error. The
-18-test provisioning suite passed with an inactive-unit regression fixture;
+provisioning suite passed with an inactive-unit regression fixture;
 this repair pass did not deploy or restart any real VPS service.
 
 ## Latest verification boundary
 
-On 2026-10-18 the expanded Linux static suite passed 52 tests. A fresh
-Linux-native source copy also passed 89 isolated integration cases, including
-kernel loading of closed and open guards with one and multiple business
-sources. This uses disposable namespaces and a fixture receiver; it does not
-test the actual German VPS. Earlier results remain in
-[TEST_STATUS.md](TEST_STATUS.md), tied to their own revision and scope. The production journal is currently
-`installed_closed`, with the endpoint disabled. The new source payload has not
-been installed on this host; neither production cold boot nor current Claude
-Desktop/CLI usability is claimed complete.
+### Current host snapshot
+
+The current host snapshot records Ubuntu 22.04 running in NAT mode and Ubuntu
+26.04 stopped. The latest plain-shell Ubuntu 22.04 check observed `lo`, NAT
+`eth0 172.19.104.128/20`, and the NAT gateway. DNS resolution and
+`curl -4 https://ifconfig.co/ip` failed because the endpoint exception is
+disabled and the tunnel is not open. This is the expected fail-closed state.
+
+The ordinary Ubuntu shell can still see `/mnt/c`, `/mnt/d`, `/mnt/e` and
+`/mnt/f`. It cannot execute `ipconfig.exe` or `powershell.exe`, and WSL interop is
+disabled. Only the strict `secure-egress run` launcher creates the private mount
+view that hides `/mnt`; do not describe a plain shell as a strict workload.
+
+Chrome, Codex CLI, Claude Code CLI and Claude Desktop are not verified as
+installed or working on the current Ubuntu 26.04 host. The native package,
+toolchain installation and vendor connections remain `NOT_RUN`.
+
+On 2026-10-18 the expanded Linux static suite passed 73 tests with two
+platform skips. A fresh Linux-native source copy also passed 89 isolated
+integration cases, including kernel loading of closed and open guards with one
+and multiple business sources. This uses disposable namespaces and a fixture
+receiver; it does not test the actual German VPS.
+
+The following paragraph is historical evidence from 2026-10-18, tied to that
+transaction and payload. It is not a current status claim. The synchronized
+installed payload was then exercised on Ubuntu-22.04 with a controlled
+Stop→Start transaction. Stop returned `succeeded/Guarded`; the first subsequent
+Start returned `succeeded/Running` and recreated both owned namespaces. Three
+historical IPv4 probes from the isolated launcher returned the VPS IPv4
+recorded in the protected profile. The isolated view contained only `lo`, `cor-bg0` and `wg0`,
+used `nameserver 10.77.0.1`, and had an unreachable IPv6 default route. OpenAI,
+Anthropic and DeepSeek unauthenticated endpoint probes returned 401, 405 and
+401 respectively, proving reachability but not authentication or inference.
+
+That historical run also exercised Claude Code CLI (`2.1.302`) inside the
+isolated launcher without proxy environment variables. Claude Desktop remains a
+separate compatibility issue:
+its old Windows/desktop proxy configuration is not part of this Linux data
+plane, and the Ubuntu-22.04 native binding requires GLIBC 2.39 while the
+distro provides 2.35. Do not replace system glibc; use a compatible distro for
+the desktop package. The current Ubuntu 26.04 installation, authenticated model
+inference, Claude Desktop runtime, cold boot, reboot, physical network switch,
+sleep/resume and independent geographic corroboration remain separate tests.
+
+On 2026-10-22 the development tree passed the Linux static/boot-guard suite
+with 87 tests and 2 platform skips, VPS server validation with 24 tests, VPS
+provisioning with 27 tests and the unified tool-installer regression with 8
+tests. These are offline fixtures; the current endpoint is disabled and no new
+live WSL or VPS request was executed.

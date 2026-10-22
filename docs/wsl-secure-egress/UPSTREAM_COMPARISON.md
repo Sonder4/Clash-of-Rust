@@ -1,136 +1,159 @@
 # Upstream Comparison
 
-## References and comparison method
+## Exact baseline
 
-This snapshot was checked on 2026-10-18:
+This comparison was checked on 2026-10-22:
 
-- Upstream: `Fu021/Clash-of-Rust`, main
-  `37683750b37be9d2bbcfb22804bec96174e14af5`.
-- Fork: `Sonder4/Clash-of-Rust`, branch `feat/wsl-secure-egress`, PR #2.
-- Repair commit: `95412ef4926935f7a2b8b82876b1ebe9114572fd`.
-- Upstream synchronization merge:
-  `7bd42e949983094e7ab72f48e4aae247c7e4be4b`.
-- The fork's main ref is `e2fb6f1`; it is an older comparison base than
-  refreshed upstream main.
+- Upstream: `Fu021/Clash-of-Rust`, `upstream/main` at
+  `2615ebc96f9f510802194727a6108bde73f4c8ed`, version 0.6.1.
+- User fork: `Sonder4/Clash-of-Rust`, PR #3, branch
+  `fix/wsl-recovery-review-20261018`.
+- Last CI-verified fork head:
+  `efa400d5aef47240d48b7022f89d9bf31a70c2dd`.
+- Current graph relation:
+  `git rev-list --left-right --count upstream/main...HEAD` returned `0 79`:
+  zero commits behind and 79 fork commits ahead.
+- Delivery target is the user's fork only. No upstream PR is authorized.
 
-The comparison below separates the existing feature branch from the five review repairs; the repair commit and merge result are filled from Git before delivery. The task's early local handoff recorded the official `v0.5.9` checkout,
-`f8a1379`, before WSL implementation. That historical release explains the
-starting environment; it is not the correct sole baseline for reviewing the
-current feature. The feature history starts with plan commit `0bbe6b0` and
-implementation commit `2661c25`, and incorporates later upstream changes.
-Current review compares the complete worktree against refreshed upstream main,
-then separates inherited upstream history from feature additions.
+The head `efa400d` has a successful GitHub `CI` workflow and a successful
+`WSL Secure Egress` workflow. This proves the exact commit in those runs. The
+current UI and dependency-snapshot verification changes are not covered by
+that result until committed, pushed and run again.
 
-Reproduce the comparison with:
+The initial WSL work began from an older upstream release. The feature branch
+was later synchronized with upstream 0.6.1 and then the fork-only code was
+retained in a merge. Review the complete PR #3 commit range for the delivered
+feature; review `upstream/main...HEAD` for the final fork delta.
+
+## Reproduce the comparison
 
 ```powershell
-git rev-parse HEAD upstream/main
-git merge-base HEAD upstream/main
-git log --oneline HEAD..upstream/main
-git diff --stat upstream/main
-git diff upstream/main -- apps/desktop crates/client-core crates/client-ui installer scripts
+git fetch upstream
+git rev-list --left-right --count upstream/main...HEAD
+git merge-base --is-ancestor upstream/main HEAD
+git log --oneline upstream/main..HEAD
+git diff --stat upstream/main...HEAD
+git diff --name-status upstream/main...HEAD
+git status --short
 ```
 
-`git diff upstream/main` includes staged and unstaged tracked changes. New
-untracked files are absent until explicitly added, so `git status --short`
-must be reviewed as well. Counts during ongoing work are not a permanent
-release manifest.
+Use the three-dot comparison for the feature delta and inspect
+`git status --short` separately. Uncommitted or untracked files appear in
+neither commit comparison and are not represented by a remote CI run.
 
-## Upstream synchronization status
+## Functional boundary
 
-Merge `7bd42e9` incorporates current upstream main `3768375`, “docs: add
-contributor guidelines and AI contribution policy”. The merge adds
-`.github/CONTRIBUTING.md`, `README.md` and `docs/workflows.md` without changing
-the WSL repair commit. The branch is synchronized with the fetched upstream
-main at this snapshot.
-
-There is no upstream code update after `a27d154` in the currently fetched
-history. Refresh and integrate the documentation update before declaring the
-branch synchronized. Delivery remains the user's fork PR #2; no PR to
-`Fu021/Clash-of-Rust` is requested.
-
-## Functional change boundary
-
-| Area | Before the WSL feature | Feature branch change |
+| Area | Upstream baseline | Fork change |
 | --- | --- | --- |
-| Desktop control | Existing proxy, subscription and diagnostics pages | WSL page and request/report controller, file selection, UAC feedback, bounded status/log lists |
-| Shared configuration | No WSL preference schema | Defaulted WSL preference field and separate request/report/state types |
-| Windows enforcement | No feature-owned WSL policy broker | Separately packaged PowerShell broker, Hyper-V policy, Docker WFP guard, guardian audit, recovery journal |
-| Linux enforcement | No feature-owned WSL manager | Installable root-owned manager, namespaces, nftables, WireGuard, DNS/interop configuration and workload launcher |
-| VPS provisioning | Existing VPS configuration is external to the client | Explicit standalone preparation/server tools; no automatic SSH deployment from the UI |
-| Packaging and updates | Official installer and update lifecycle | Helper resources, protected code-upgrade/rollback transaction, active-recovery uninstall gate; official self-update disabled in the fork |
-| Validation | Upstream CI and unit suites | WSL core/UI fixtures, Windows offline suites and disposable Linux/WFP integration |
+| Desktop surface | Existing proxy, subscription, diagnostics and settings pages | WSL page, request/report controller, profile selection, status/log display and explicit recovery confirmation |
+| Shared configuration | No WSL profile field | Defaulted WSL settings registration |
+| Windows boundary | No feature-owned WSL broker | Hyper-V policy, Docker containment, guardian service, protected profile handling, recovery journal and endpoint transaction |
+| Linux boundary | No feature-owned WSL egress manager | Root-owned manager, namespaces, nftables guard, fixed WireGuard transport, DNS policy, interop controls, boot guard and strict launcher |
+| VPS | No bundled WSL exit-node lifecycle | Separate fixed-endpoint VPS service and provisioning tools |
+| Packaging | Upstream installer and updater | Protected helper resources and code-only package recovery |
+| Validation | Upstream CI | Additional Windows, Linux, Rust and WSL-specific CI jobs |
 
-The WSL data plane is implemented in `scripts/wsl-secure-egress/linux`, not
-inside the Clash desktop process. Windows privileged policy lives in
-`scripts/wsl-secure-egress` and its guardian binary. The Rust WSL controller
-issues fixed broker requests and consumes structured responses.
+The Linux backend is implemented under
+`scripts/wsl-secure-egress/linux`; the Windows lifecycle wrapper is under
+`clash-of-wsl/` and `scripts/wsl-secure-egress/`. Clash of Rust acts as the
+controller and status surface. It does not embed the Linux data plane or own the
+WireGuard keys.
 
-The complete feature still requires a desktop adapter, request schema and
-package resources. “Standalone backend” does not mean zero changes to shared
-registration or installation code.
+## Changes outside WSL-specific modules
 
-## Files outside the dedicated backend
+The feature necessarily touches shared registration and packaging:
 
-The intended integration points are WSL-specific desktop modules and Slint
-page/state/models; application page/message registration, confirmation and
-presentation; a defaulted WSL settings field; the guardian target;
-installer/resource packaging; and tests and CI entry points. These additions
-do not rewrite the proxy engine, subscription model or platform traffic logic.
+- application page/message registration, confirmation flow and UI projection;
+- a defaulted WSL configuration field;
+- the guardian binary and installer resources;
+- build, test and CI wiring;
+- the shared field control's optional disabled state.
 
-There are two explicit broader effects:
+The fork also disables the upstream automatic updater because an official
+package cannot carry the fork's protected WSL resources. This is a visible fork
+behavior change and must remain documented if a maintained fork update channel
+is later introduced.
 
-1. `apps/desktop/src/update/mod.rs` and application update handlers disable the
-   official updater for this fork. This prevents an upstream package from
-   overwriting custom WSL resources, but changes existing update behavior and
-   should be reconsidered if a maintained fork update channel becomes available.
-2. `crates/client-ui/ui/components/controls.slint` adds an `enabled` input to
-   the shared field component, defaulting to true. It permits WSL controls to
-   be disabled during operations; existing call sites retain their default.
+The proxy engine, subscription model, platform traffic engine and unrelated
+network components are not rewritten by the WSL feature.
 
-Installer and build/CI files are also changed. Their scope is package
-preservation, helper delivery and validation; they are not UI-only changes.
-The retained WSL workflow is fork infrastructure and does not imply permission
-to add it to upstream. Upstream workflow ownership and review rules remain
-applicable to any future upstream contribution.
+## Pull request review matrix
 
-## Five outstanding PR comments
+The review feedback contains seven independent issue groups represented by
+eight unresolved GitHub threads. The duplicate `prepared_for_reinstall` finding
+is one issue. The listed repairs have matching offline checks and were covered
+by the green `efa400d` CI; the current UI and verifier development changes still
+need a new hosted run.
 
-1. **Profile requirement:** executed Install/Start requests require
-   `profile_path`; endpoint-only input cannot generate a runnable request.
-   Explicit endpoint, port, distro and backend values are checked against the
-   protected configuration rather than silently ignored.
-2. **Partial installation rollback:** dictionary-safe optional state reads and
-   write-ahead markers allow recorded host changes to be restored without an
-   absent Linux manager. Once Linux installation may have started, Windows-only
-   recovery refuses to release the host guard.
-3. **Restore followed by reinstall:** a `restored` journal is archived with its
-   recovery artifacts before a new generation. Phase/generation readback and
-   snapshot SHA256 validation precede retiring live artifacts.
-4. **Every-distro boot guard:** each managed ordinary distribution has a
-   profile-independent boot hook. Exact static and verified manager guards
-   are recognized; unknown tables are preserved under a separate emergency
-   deny. Atomic replacement and first-start races are covered by regression
-   cases.
-5. **Fresh VPS unit:** the pre-start `systemctl is-active` query tolerates
-   nonzero inactive status, so a new unit can proceed to `enable --now`.
+| Review issue | Repair | Offline evidence | New-head CI |
+| --- | --- | --- | --- |
+| Executed Install/Start needs a profile | Rust validation rejects empty profile and endpoint-only requests | Core/desktop tests | PASS at `efa400d` |
+| Partial Windows install must roll back without Linux helper | Explicit partial-phase recovery and write-ahead state | Windows broker/workflow fixtures | PASS at `efa400d` |
+| A restored generation can be reinstalled safely | Verified `restored` journal is archived, then a new generation starts | Windows unit/workflow fixtures | PASS at `efa400d` |
+| Every managed distro needs a boot guard | Every configured role writes the shared default-drop guard | Linux static and boot-guard fixtures | PASS at `efa400d` |
+| Fresh VPS unit may still be inactive | Pre-start activity check tolerates inactive status before `enable --now` | Provisioning suite | PASS at `efa400d` |
+| `prepared_for_reinstall` must not enter adoption | Broker partial recovery, Rust report allowlist and UI state were extended | Rust and Windows workflow tests | PASS at `efa400d` |
+| UI must retain restore-original-network | Danger-styled button dispatches `Rollback` with `restore-confirm` | Rust UI tests | PASS at `efa400d`; compact-page regression pending CI |
+| Restore failure must retain payload | Uninstall returns `blocked` before service or file removal | Isolated execute-path fixture is PASS | PASS at `efa400d` |
+| Installation must register and start guardian | Execute path creates, starts and reads back the owned service | Isolated execute-path fixture is PASS | PASS at `efa400d` |
 
-## Executed checks and outstanding acceptance
+The administrator argument-vector regression now executes the elevation
+function against an isolated capture hook and verifies that paths containing
+spaces remain single arguments. The installer test executes both the install
+and failed-restore uninstall branches with cmdlets mocked. These tests provide
+offline execution evidence; they do not replace the required UAC and live-host
+acceptance.
 
-Windows unit tests passed 125 assertions, workflow 96, elevation 21 and
-package-upgrade 38. Release WSL core and desktop WSL tests each passed 27.
-Expanded Linux static tests passed 52 and the newest full isolated integration
-run passed 89 cases from a fresh Linux-native source copy. Release build and
-workspace/all-targets Clippy with warnings denied also passed. Exact commands
-and subsequent results belong in
-[TEST_STATUS.md](TEST_STATUS.md).
+## Current host and acceptance boundary
 
-These results do not upgrade the production acceptance claim. The installed
-Clash of Rust 0.6.0 is running from Program Files; this source revision has not
-replaced it. Production WSL is `installed_closed`. Current VPS/Claude use,
-authenticated inference, cold boot, physical network changes and sleep/resume
-remain outside this repair's completed verification.
+The last CI success does not imply deployment:
 
-New-head GitHub CI must complete before the fork PR is merged. Historical
-successful CI runs belong to their exact old commits and cannot be reused as
-the result for these changes.
+| Item | Current state |
+| --- | --- |
+| Windows profile | Missing; root-only Linux copy exists |
+| Hyper-V endpoint rule | Present, `Enabled=False` |
+| Broker phase | `failed_closed_requested` |
+| Guardian service | Running and Automatic |
+| Ubuntu 22.04 | Running, NAT-only; DNS and HTTPS blocked |
+| Ubuntu 26.04 | Installed under `F:\WSL`; stopped |
+| Current VPS source | `NOT_RUN` |
+| OpenAI, Anthropic, DeepSeek | `NOT_RUN` |
+| Chrome, Codex CLI, Claude Code CLI, Claude Desktop | `NOT_RUN` or not installed |
+| Interop and strict-launcher isolation | Plain-shell checks only; current strict live test `NOT_RUN` |
+| Stop/Start, cold boot, network switch | `NOT_RUN` |
+
+Historical 2026-10-18 live evidence remains in
+[TEST_STATUS.md](TEST_STATUS.md) and
+[LOCAL_TEST_2026-10-18.md](LOCAL_TEST_2026-10-18.md). That evidence is tied to
+the payload and network state at that time and cannot prove the current missing
+profile or disabled endpoint is usable.
+
+## Test interpretation
+
+The latest development-tree results recorded in
+[TEST_STATUS.md](TEST_STATUS.md) include:
+
+| Suite | Result |
+| --- | --- |
+| Windows unit | PASS, 166 assertions |
+| Windows workflow | PASS, 244 assertions |
+| Windows elevation | PASS, 21 assertions |
+| Profile restore | PASS, 18 assertions |
+| Package staging | PASS, 70 assertions |
+| Package upgrade | PASS, 53 assertions |
+| Admin job construction | PASS, 25 assertions |
+| Clash of WSL | PASS, 34 assertions |
+| Linux static/boot guard | PASS, 87 tests, 2 skipped |
+| VPS server | PASS, 24 tests |
+| VPS provisioning | PASS, 27 tests |
+| Tool installer static regression | PASS, 8 tests |
+| Desktop Rust binary, serial | PASS, 107/107 |
+
+An earlier parallel desktop run returned 105/106 because one motion test raced
+the shared headless renderer. The failing test passed alone and the complete
+serial run passed. The parallel failure remains recorded rather than being
+rewritten as an all-green parallel result.
+
+Before merge, the exact final commit must pass both GitHub workflows. Offline
+tests, a historical live connection and a running service are separate forms of
+evidence.

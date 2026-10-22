@@ -7,6 +7,7 @@ These tests validate gating and evidence handling, not real firewall behavior.
 """
 
 import contextlib
+import errno
 import importlib.util
 import io
 import json
@@ -33,7 +34,14 @@ with patch.object(subprocess, "run", side_effect=AssertionError("command during 
 manager_path = HERE.parent / "linux" / "manager.py"
 manager_spec = importlib.util.spec_from_file_location("cor_egress_manager", manager_path)
 manager = importlib.util.module_from_spec(manager_spec)
-with patch.object(subprocess, "run", side_effect=AssertionError("command during import")):
+with contextlib.ExitStack() as import_context:
+    if sys.platform != 'linux':
+        # The production module is Linux-only; portable offline tests never
+        # acquire a real Linux flock, including when run on the Windows host.
+        import_context.enter_context(patch.dict(
+            sys.modules, {'fcntl': Mock(LOCK_EX=2, LOCK_NB=4, LOCK_UN=8)}))
+    import_context.enter_context(patch.object(
+        subprocess, "run", side_effect=AssertionError("command during import")))
     manager_spec.loader.exec_module(manager)
 
 
@@ -52,6 +60,496 @@ def manager_table_fixture(owner='owned', opened=False, state=None, profile=None)
                                'chain': name, 'expr': expression}}
                      for expression in expected[name])
     return {'nftables': items}
+
+
+class CrossDistroGuardTests(unittest.TestCase):
+    """Run the real classifier/boot path with distinct distro state and nft I/O."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.state_path = Path(self.temp.name)
+        self.policy = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                       'resolver_ipv4': '10.77.0.1'}
+        self.runtime = {'uplink': 'eth0',
+                        'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+                        'forward_sources': [{'interface': 'docker0',
+                                             'source_cidr': '172.18.0.0/16'}]}
+        self.journal = {'schema': 1, 'role': 'distro-config', 'phase': 'DistroConfigured',
+                        'owner': 'different-distro-owner', 'generation': 71,
+                        'shared_guard_profile': self.policy}
+        self.tables = {}
+        self.writes = []
+        self.saved = []
+
+    def kernel(self, argv, ns=None, data=None, **kwargs):
+        if argv == ['ip', '-d', '-j', 'link', 'show', 'dev', 'eth0']:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([{'ifname': 'eth0', 'flags': ['UP'],
+                                             'linkinfo': {}}]).encode(), stderr=b'')
+        if argv == ['ip', '-j', 'link', 'show'] and ns is None:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'ifname': manager.ROOT_IF, 'flags': ['UP']},
+                    {'ifname': manager.BUS_IF, 'flags': ['UP']},
+                    {'ifname': 'eth0', 'flags': ['UP']},
+                ]).encode(), stderr=b'')
+        if argv == ['ip', '-j', 'link', 'show'] and ns == manager.TRANSPORT:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'ifname': 'lo', 'flags': ['UP']},
+                    {'ifname': manager.NS_IF, 'flags': ['UP']},
+                ]).encode(), stderr=b'')
+        if argv == ['ip', '-j', 'link', 'show'] and ns == manager.GW:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'ifname': 'lo', 'flags': ['UP']},
+                    {'ifname': 'wg0', 'flags': ['UP']},
+                    {'ifname': manager.GW_BUS_IF, 'flags': ['UP']},
+                ]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2']:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([{'dev': 'eth0'}]).encode(), stderr=b'')
+        # shared_root_runtime_matches only inspects the root namespace, so a
+        # sibling distro never opens the manager's private /run/netns binds.
+        if (argv[:8] == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2',
+                         'from', manager.TRANSPORT_IP] and
+                argv[8:] == ['iif', manager.ROOT_IF]):
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([{'dev': 'eth0'}]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-N', '-j', 'route', 'show', 'table', manager.ROUTE_TABLE]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'dst': 'default', 'dev': manager.BUS_IF,
+                     'gateway': manager.BUS_GW_IP},
+                    {'dst': 'default', 'type': 'unreachable'},
+                ]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-j', 'rule', 'show']:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'priority': manager.PREF_DEFAULT_DENY,
+                     'table': int(manager.ROUTE_TABLE)}]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-j', 'route', 'show'] and ns == manager.TRANSPORT:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'dst': '192.0.2.2/32', 'dev': manager.NS_IF,
+                     'gateway': manager.ROOT_IP},
+                ]).encode(), stderr=b'')
+        if argv == ['ip', '-4', '-j', 'route', 'show'] and ns == manager.GW:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'dst': 'default', 'dev': 'wg0'},
+                ]).encode(), stderr=b'')
+        if argv == ['ip', '-6', '-j', 'route', 'show'] and ns == manager.GW:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps([
+                    {'dst': 'default', 'type': 'unreachable'},
+                ]).encode(), stderr=b'')
+        if argv == ['wg', 'show', 'wg0', 'endpoints'] and ns == manager.GW:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=b'peer-key\t192.0.2.2:51820\n', stderr=b'')
+        if argv == ['wg', 'show', 'wg0', 'allowed-ips'] and ns == manager.GW:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=b'peer-key\t0.0.0.0/0\n', stderr=b'')
+        if argv[:6] == ['nft', '-j', 'list', 'table', 'inet', manager.TABLE] or \
+                argv[:6] == ['nft', '-j', 'list', 'table', 'inet', manager.BOOT_EMERGENCY]:
+            listed = self.tables.get(argv[5])
+            return subprocess.CompletedProcess(
+                argv, 0 if listed is not None else 1,
+                stdout=json.dumps(listed).encode() if listed is not None else b'',
+                stderr=b'' if listed is not None else b'No such file or directory')
+        if argv == ['nft', '-f', '-']:
+            self.writes.append(data)
+            if data == manager.static_boot_rules().encode():
+                fixture = manager_table_fixture()
+                fixture['nftables'][0]['table']['comment'] = manager.STATIC_BOOT_COMMENT
+                self.tables[manager.TABLE] = fixture
+            elif data == manager.boot_emergency_rules().encode():
+                items = [{'table': {'family': 'inet', 'name': manager.BOOT_EMERGENCY,
+                                     'comment': manager.BOOT_EMERGENCY_COMMENT}}]
+                for name in ('output', 'forward'):
+                    items += [
+                        {'chain': {'family': 'inet', 'table': manager.BOOT_EMERGENCY,
+                                   'name': name, 'type': 'filter', 'hook': name,
+                                   'prio': -200, 'policy': 'drop'}},
+                        {'rule': {'family': 'inet', 'table': manager.BOOT_EMERGENCY,
+                                  'chain': name, 'expr': [{'counter': {}}, {'drop': None}]}}]
+                self.tables[manager.BOOT_EMERGENCY] = {'nftables': items}
+            else:
+                self.fail('Boot hook attempted to replace a shared table')
+            return subprocess.CompletedProcess(argv, 0, stdout=b'', stderr=b'')
+        self.fail('Unexpected kernel operation: ' + repr(argv))
+
+    def boot(self):
+        (self.state_path / 'state.json').write_bytes(manager.encode(self.journal))
+        with patch.object(manager, 'STATE', self.state_path), \
+                patch.object(manager, 'private_path', side_effect=lambda path: Path(path)), \
+                patch.object(manager, 'command', side_effect=self.kernel), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
+                patch.object(manager, 'read_profile', side_effect=AssertionError('manager private profile read')):
+            instance = manager.Manager(manager.parse(['guard']))
+            instance.save = Mock(side_effect=lambda: self.saved.append(
+                {'phase': instance.s.get('phase'),
+                 'root_namespace': instance.s.get('root_namespace'),
+                 'boot_id': instance.s.get('boot_id')}))
+            return instance.boot_guard()
+
+    def test_sibling_boot_retains_exact_running_manager_without_private_manager_state(self):
+        for comment in ('cor-egress:manager-owner', None):
+            with self.subTest(comment=comment):
+                fixture = manager_table_fixture('manager-owner', True, self.runtime, self.policy)
+                if comment is None:
+                    fixture['nftables'][0]['table'].pop('comment')
+                self.tables = {manager.TABLE: fixture}
+                before = json.loads(json.dumps(fixture))
+                result = self.boot()
+                self.assertEqual(result['outcome'], 'succeeded')
+                self.assertEqual(self.tables[manager.TABLE], before)
+                self.assertEqual(self.writes, [])
+                self.assertNotIn(manager.BOOT_EMERGENCY, self.tables)
+
+    def test_sibling_boot_accepts_single_root_source_and_no_native_bridges(self):
+        runtime = dict(self.runtime, root_sources=[manager.BUS_ROOT_IP + '/32'],
+                       forward_sources=[])
+        self.tables[manager.TABLE] = manager_table_fixture(
+            'manager-owner', True, runtime, self.policy)
+        self.assertEqual(self.boot()['outcome'], 'succeeded')
+        self.assertEqual(self.writes, [])
+
+    def test_sibling_boot_retains_exact_closed_manager_with_different_owner(self):
+        self.tables[manager.TABLE] = manager_table_fixture('manager-owner')
+        # A closed deny can also be safely recognized for older journals.
+        self.journal.pop('shared_guard_profile')
+        self.assertEqual(self.boot()['outcome'], 'succeeded')
+        self.assertEqual(self.writes, [])
+
+    def test_first_sibling_boot_creates_only_static_deny(self):
+        self.assertEqual(self.boot()['outcome'], 'succeeded')
+        self.assertEqual(self.writes, [manager.static_boot_rules().encode()])
+        self.assertIn(manager.TABLE, self.tables)
+        self.assertNotIn(manager.BOOT_EMERGENCY, self.tables)
+
+    def test_sibling_boot_preserves_unknown_manager_and_installs_independent_deny(self):
+        baseline = manager_table_fixture('manager-owner', True, self.runtime, self.policy)
+        mutations = []
+        endpoint = json.loads(json.dumps(baseline))
+        endpoint['nftables'] = json.loads(json.dumps(endpoint['nftables']).replace(
+            '"192.0.2.2"', '"203.0.113.9"'))
+        mutations.append(endpoint)
+        resolver = json.loads(json.dumps(baseline))
+        resolver['nftables'] = json.loads(json.dumps(resolver['nftables']).replace(
+            '"10.77.0.1"', '"203.0.113.10"'))
+        mutations.append(resolver)
+        unbounded = json.loads(json.dumps(baseline))
+        unbounded['nftables'].append({'rule': {
+            'family': 'inet', 'table': manager.TABLE, 'chain': 'output',
+            'expr': [{'accept': None}]}})
+        mutations.append(unbounded)
+        without_ipv6 = json.loads(json.dumps(baseline))
+        without_ipv6['nftables'] = [
+            item for item in without_ipv6['nftables']
+            if not (item.get('rule', {}).get('chain') == 'forward' and
+                    item['rule']['expr'][0].get('match', {}).get('left') ==
+                    {'meta': {'key': 'nfproto'}})]
+        mutations.append(without_ipv6)
+        unknown_object = json.loads(json.dumps(baseline))
+        unknown_object['nftables'].append({'set': {
+            'family': 'inet', 'table': manager.TABLE, 'name': 'foreign'}})
+        mutations.append(unknown_object)
+        for fixture in mutations:
+            with self.subTest(fixture=fixture):
+                self.tables = {manager.TABLE: fixture}
+                self.writes = []
+                self.assertEqual(self.boot()['outcome'], 'blocked')
+                self.assertEqual(self.tables[manager.TABLE], fixture)
+                self.assertEqual(self.writes, [manager.boot_emergency_rules().encode()])
+
+    def test_sibling_boot_refuses_running_guard_without_public_constraints(self):
+        self.journal.pop('shared_guard_profile')
+        self.tables[manager.TABLE] = manager_table_fixture(
+            'manager-owner', True, self.runtime, self.policy)
+        self.assertEqual(self.boot()['outcome'], 'blocked')
+        self.assertEqual(self.writes, [manager.boot_emergency_rules().encode()])
+
+    def test_sibling_boot_rejects_open_table_without_live_runtime(self):
+        self.tables[manager.TABLE] = manager_table_fixture(
+            'manager-owner', True, self.runtime, self.policy)
+        with patch.object(manager, 'shared_root_runtime_matches', return_value=False) as runtime:
+            self.assertEqual(self.boot()['outcome'], 'blocked')
+        runtime.assert_called_once_with(self.policy, 'eth0')
+        self.assertEqual(self.writes, [manager.boot_emergency_rules().encode()])
+
+    def test_shared_uplink_classifier_rejects_virtual_link_kind(self):
+        with patch.object(manager, 'json_command', return_value=[{
+                'ifname': 'eth0', 'flags': ['UP'],
+                'linkinfo': {'info_kind': 'veth'}}]):
+            self.assertFalse(manager.valid_uplink_interface('eth0'))
+
+    def test_shared_uplink_classifier_accepts_only_exact_isolated_ci_fixture(self):
+        fixture = [{'ifname': 'fixture-uplink', 'flags': ['UP'],
+                    'linkinfo': {'info_kind': 'veth'}}]
+        with patch.object(manager, 'ISOLATED_TEST_ENV', True), \
+                patch.object(manager, 'json_command', return_value=fixture):
+            self.assertTrue(manager.valid_uplink_interface('fixture-uplink'))
+
+    def test_shared_uplink_classifier_requires_both_isolated_ci_gates(self):
+        fixture = [{'ifname': 'fixture-uplink', 'flags': ['UP'],
+                    'linkinfo': {'info_kind': 'veth'}}]
+        with patch.object(manager, 'ISOLATED_TEST_ENV', False), \
+                patch.object(manager, 'json_command', return_value=fixture):
+            self.assertFalse(manager.valid_uplink_interface('fixture-uplink'))
+
+    def test_shared_uplink_classifier_rejects_other_virtual_fixture_name_or_kind(self):
+        with patch.object(manager, 'ISOLATED_TEST_ENV', True):
+            for name, kind in (('other-uplink', 'veth'),
+                               ('fixture-uplink', 'wireguard')):
+                with self.subTest(name=name, kind=kind), \
+                        patch.object(manager, 'json_command', return_value=[{
+                            'ifname': name, 'flags': ['UP'],
+                            'linkinfo': {'info_kind': kind}}]):
+                    self.assertFalse(manager.valid_uplink_interface(name))
+
+    def test_shared_uplink_classifier_rejects_virtual_link_name(self):
+        with patch.object(manager, 'json_command') as json_command:
+            self.assertFalse(manager.valid_uplink_interface('docker0'))
+        json_command.assert_not_called()
+
+    def test_configure_persists_only_public_guard_constraints(self):
+        profile = dict(self.policy, backend='wireguard', private_key='secret-key',
+                       peer_public_key='public-key', unused_future_field='secret')
+        instance = object.__new__(manager.Manager)
+        instance.s = {}
+        instance.args = manager.parse(['configure', '--generation', '71'])
+        instance.save = Mock()
+        instance.distro_prepare = Mock()
+        instance.event = Mock()
+        with patch.object(manager.sys, 'stdin', Mock(buffer=io.BytesIO(b'{}'))), \
+                patch.object(manager, 'profile_validate', return_value=profile), \
+                patch.object(manager.os, 'readlink', return_value='shared-netns'), \
+                patch.object(manager, 'boot_id', return_value='current'):
+            instance.configure()
+        self.assertEqual(instance.s['shared_guard_profile'], self.policy)
+        self.assertNotIn('private_key', json.dumps(instance.s))
+        self.assertNotIn('peer_public_key', json.dumps(instance.s))
+        self.assertNotIn('unused_future_field', json.dumps(instance.s))
+
+
+class StartEmergencyGuardTests(unittest.TestCase):
+    """start() must never report Running while a boot deny is still present."""
+
+    def setUp(self):
+        self.instance = object.__new__(manager.Manager)
+        self.instance.s = {'phase': 'Running', 'owner': 'owned'}
+        self.instance.load = Mock()
+        self.instance.assert_table = Mock()
+        self.instance.checks = []
+
+    def test_start_refuses_an_existing_boot_emergency_table(self):
+        with patch.object(manager, 'list_table', return_value={'nftables': []}), \
+                self.assertRaises(manager.Blocked) as raised:
+            manager.Manager.start(self.instance)
+        self.assertEqual(str(raised.exception),
+                         'Existing boot emergency table preserved; explicit recovery is required.')
+        self.instance.assert_table.assert_not_called()
+
+    def test_start_proceeds_when_no_boot_emergency_table_exists(self):
+        with patch.object(manager, 'list_table', return_value=None), \
+                patch.object(manager, 'shared_root_runtime_matches', return_value=True):
+            # Stop before any further work so only the guard question is answered.
+            self.instance.assert_table = Mock(side_effect=manager.Blocked('stop'))
+            with self.assertRaises(manager.Blocked):
+                manager.Manager.start(self.instance)
+        self.instance.assert_table.assert_called_once()
+
+
+class GatewayForwardSysctlTests(unittest.TestCase):
+    """The gateway namespace global ip_forward must be journaled and restored."""
+
+    def setUp(self):
+        self.instance = object.__new__(manager.Manager)
+        self.instance.s = {'uplink': 'eth0', 'forward_sources': [], 'sysctls': [],
+                           'root_namespace': 'current', 'boot_id': 'current'}
+        self.instance.p = {'backend': 'wireguard'}
+        self.instance.save = Mock()
+        self.writes = []
+
+    def kernel(self, argv, ns=None, data=None, **kwargs):
+        self.writes.append((ns, argv, data))
+        if argv[0] == 'cat':
+            # The disable path verifies the value it wrote before restoring.
+            # Journal records hold the value the test intends to observe.
+            record = next((rec for rec in self.instance.s.get('sysctls', [])
+                           if rec.get('path') == argv[1]), None)
+            value = record['written'] if record else '0'
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=(value + '\n').encode(), stderr=b'')
+        return subprocess.CompletedProcess(argv, 0, stdout=b'', stderr=b'')
+
+    def links(self, argv, ns=None, data=None, **kwargs):
+        return [{'ifname': ns or 'root', 'ifindex': 7}]
+
+    def test_enable_journals_and_sets_the_namespace_global_forward(self):
+        with patch.object(manager, 'command', side_effect=self.kernel), \
+                patch.object(manager, 'json_command', side_effect=self.links):
+            manager.Manager.sysctl_forward(self.instance, True)
+        global_records = [rec for rec in self.instance.s['sysctls']
+                          if rec.get('scope') == 'namespace']
+        self.assertEqual(len(global_records), 1)
+        self.assertEqual(global_records[0]['namespace'], manager.GW)
+        self.assertEqual(global_records[0]['path'],
+                         '/proc/sys/net/ipv4/ip_forward')
+        self.assertEqual(global_records[0]['before'], '0')
+        self.assertEqual(global_records[0]['written'], '1')
+        self.assertIn((manager.GW, ['tee', '/proc/sys/net/ipv4/ip_forward'], b'1\n'),
+                      self.writes)
+
+    def test_disable_restores_the_recorded_before_value(self):
+        self.instance.s['sysctls'] = [{
+            'namespace': manager.GW, 'path': '/proc/sys/net/ipv4/ip_forward',
+            'before': '0', 'written': '1', 'scope': 'namespace'}]
+        with patch.object(manager, 'command', side_effect=self.kernel), \
+                patch.object(manager, 'json_command', side_effect=self.links):
+            manager.Manager.sysctl_forward(self.instance, False)
+        self.assertIn((manager.GW, ['tee', '/proc/sys/net/ipv4/ip_forward'], b'0\n'),
+                      self.writes)
+
+
+class SharedRootRuntimeTests(unittest.TestCase):
+    """A sibling distro must never require the manager's private netns binds."""
+
+    policy = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+              'resolver_ipv4': '10.77.0.1'}
+
+    def kernel(self, argv, ns=None, data=None, **kwargs):
+        if argv[:5] == ['ip', '-4', '-j', 'route', 'get']:
+            return [{'dev': 'eth0'}]
+        if argv == ['ip', '-j', 'link', 'show']:
+            return [
+                {'ifname': manager.ROOT_IF, 'flags': ['UP']},
+                {'ifname': manager.BUS_IF, 'flags': ['UP']},
+            ]
+        if argv[5:] == ['show', 'table', manager.ROUTE_TABLE]:
+            return [
+                {'dst': 'default', 'dev': manager.BUS_IF,
+                 'gateway': manager.BUS_GW_IP},
+                {'dst': 'default', 'type': 'unreachable'},
+            ]
+        if argv == ['ip', '-4', '-j', 'rule', 'show']:
+            return [{'priority': manager.PREF_DEFAULT_DENY,
+                     'table': int(manager.ROUTE_TABLE)}]
+        raise AssertionError('Unexpected kernel operation: ' + repr(argv))
+
+    def test_root_only_proof_never_opens_a_private_netns(self):
+        with patch.object(manager, 'valid_uplink_interface', return_value=True), \
+                patch.object(manager, 'json_command', side_effect=self.kernel):
+            self.assertTrue(manager.shared_root_runtime_matches(self.policy, 'eth0'))
+
+    def test_missing_uplink_route_is_rejected(self):
+        def bad_route(argv, ns=None, data=None, **kwargs):
+            if argv[:5] == ['ip', '-4', '-j', 'route', 'get']:
+                return [{'dev': 'other'}]
+            raise AssertionError('unexpected: ' + repr(argv))
+
+        with patch.object(manager, 'valid_uplink_interface', return_value=True), \
+                patch.object(manager, 'json_command', side_effect=bad_route):
+            self.assertFalse(manager.shared_root_runtime_matches(self.policy, 'eth0'))
+
+
+class DistroRestoreTransactionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.instance = object.__new__(manager.Manager)
+        self.instance.args = manager.parse([
+            'restore-config', '--generation', '72', '--allow-unconfigured'])
+        self.instance.file = Path(self.temp.name) / 'state.json'
+        self.instance.s = {}
+        self.instance.p = None
+        self.instance.checks = []
+        self.instance.save = Mock()
+        self.instance.restore_files = Mock()
+
+    def test_configure_failure_before_journal_allows_noop_restore(self):
+        self.instance.args = manager.parse(['configure', '--generation', '72'])
+        with patch.object(manager.sys, 'stdin', Mock(buffer=io.BytesIO(b'{}'))), \
+                patch.object(manager, 'profile_validate', side_effect=manager.Blocked('invalid profile')):
+            with self.assertRaises(manager.Blocked):
+                self.instance.configure()
+        self.instance.args = manager.parse([
+            'restore-config', '--generation', '72', '--allow-unconfigured'])
+        event = self.instance.restore_config()
+        self.assertEqual(event['outcome'], 'succeeded')
+        self.assertEqual(event['generation'], 72)
+        self.assertEqual(event['phase'], 'DistroUnconfigured')
+        self.assertEqual(event['facts'], {'configuration_restore': 'not_started'})
+        self.assertEqual(self.instance.s, {})
+        self.instance.save.assert_not_called()
+        self.instance.restore_files.assert_not_called()
+
+    def test_clean_older_retired_distro_is_preserved_on_noop_restore(self):
+        state = {'schema': 1, 'generation': 71, 'role': 'distro-config',
+                 'phase': 'DistroRestored', 'files': {}}
+        self.instance.s = state.copy()
+        event = self.instance.restore_config()
+        self.assertEqual(event['outcome'], 'succeeded')
+        self.assertEqual(event['generation'], 72)
+        self.assertEqual(self.instance.s, state)
+        self.instance.save.assert_not_called()
+        self.instance.restore_files.assert_not_called()
+
+    def test_current_transaction_still_restores_files_and_saves_retired_state(self):
+        self.instance.s = {'generation': 72, 'role': 'distro-config',
+                           'phase': 'ConfiguringDistro', 'files': {}}
+        event = self.instance.restore_config()
+        self.assertEqual(event['generation'], 72)
+        self.assertEqual(event['phase'], 'DistroRestored')
+        self.instance.restore_files.assert_called_once()
+        self.instance.save.assert_called_once()
+
+    def test_missing_or_retired_proof_cannot_hide_existing_or_foreign_journal(self):
+        self.instance.file.write_text('{}')
+        with self.assertRaises(manager.Blocked):
+            self.instance.restore_config()
+        self.instance.file.unlink()
+        retired = {'schema': 1, 'generation': 71, 'role': 'distro-config',
+                   'phase': 'DistroRestored', 'files': {}}
+        for change in (
+                {'schema': 2}, {'schema': True}, {'phase': 'ConfiguringDistro'}, {'generation': 73},
+                {'generation': 0}, {'generation': True}, {'role': 'manager'},
+                {'files': {'/etc/wsl.conf': {'pending': True}}},
+                {'tables': {'root': 'hash'}}, {'namespaces': {'owned': {}}},
+                {'routing': {'owned': True}}, {'sysctls': {'owned': True}}):
+            with self.subTest(change=change):
+                self.instance.s = dict(retired, **change)
+                with self.assertRaises(manager.Blocked):
+                    self.instance.restore_config()
+        self.instance.restore_files.assert_not_called()
+        self.instance.save.assert_not_called()
+
+    def test_current_generation_file_drift_is_still_blocking(self):
+        self.instance.s = {'generation': 72, 'role': 'distro-config',
+                           'phase': 'ConfiguringDistro', 'files': {}}
+        self.instance.restore_files.side_effect = manager.Blocked('Distro configuration drift')
+        with self.assertRaisesRegex(manager.Blocked, 'configuration drift'):
+            self.instance.restore_config()
+        self.instance.save.assert_not_called()
+
+    def test_noop_restore_requires_explicit_pending_transaction_permission(self):
+        self.instance.args = manager.parse(['restore-config', '--generation', '72'])
+        with self.assertRaises(manager.Blocked):
+            self.instance.restore_config()
+        self.instance.s = {'schema': 1, 'generation': 71, 'role': 'distro-config',
+                           'phase': 'DistroRestored', 'files': {}}
+        with self.assertRaisesRegex(manager.Blocked, 'Generation mismatch'):
+            self.instance.restore_config()
+        self.instance.restore_files.assert_not_called()
+        self.instance.save.assert_not_called()
+
+    def test_unconfigured_permission_is_restricted_to_restore_config(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                manager.parse(['rollback', '--generation', '72', '--allow-unconfigured'])
 
 
 class AttestationTests(unittest.TestCase):
@@ -115,9 +613,68 @@ class AttestationTests(unittest.TestCase):
 
 
 class GateTests(unittest.TestCase):
+    def test_manager_lock_waits_for_boot_guard_before_first_start(self):
+        lock = object()
+        with patch.object(manager.fcntl, 'flock',
+                          side_effect=[BlockingIOError(errno.EAGAIN, 'busy'), None]) as flock, \
+                patch.object(manager.time, 'monotonic', side_effect=[0.0, 0.0, 0.1]), \
+                patch.object(manager.time, 'sleep') as sleep:
+            manager.acquire_manager_lock(lock)
+        self.assertEqual(flock.call_count, 2)
+        sleep.assert_called_once_with(manager.MANAGER_LOCK_POLL_SECONDS)
+
+    def test_manager_lock_timeout_stays_fail_closed(self):
+        lock = object()
+        with patch.object(manager.fcntl, 'flock',
+                          side_effect=BlockingIOError(errno.EAGAIN, 'busy')), \
+                patch.object(manager.time, 'monotonic',
+                             side_effect=[0.0, manager.MANAGER_LOCK_WAIT_SECONDS]):
+            with self.assertRaisesRegex(manager.Blocked, 'manager operation remained active'):
+                manager.acquire_manager_lock(lock)
+
     def test_boot_guard_uses_fixed_installed_wrapper(self):
         self.assertEqual(manager.boot_guard_command(),
                          '/usr/local/lib/cor-egress/manager guard')
+
+    def test_distro_prepare_snapshots_fixed_boot_guard_for_every_role(self):
+        for role in ('manager', 'distro-config'):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                files = {
+                    '/etc/wsl.conf': root / 'wsl.conf',
+                    '/etc/resolv.conf': root / 'resolv.conf',
+                    '/etc/hosts': root / 'hosts',
+                }
+                instance = object.__new__(manager.Manager)
+                instance.s = {'role': role}
+                instance.p = {'resolver_ipv4': '10.77.0.1'}
+                instance.snapshot = Mock()
+
+                def fixture_path(value):
+                    return files.get(str(value), Path(value))
+
+                with patch.object(manager, 'Path', side_effect=fixture_path), \
+                        patch.object(manager.socket, 'gethostname', return_value='fixture-wsl'):
+                    instance.distro_prepare()
+
+                snapshots = {
+                    Path(call.args[0]).name: call.args[1]
+                    for call in instance.snapshot.call_args_list
+                }
+                wsl_conf = snapshots['wsl.conf'].decode()
+                self.assertIn('[network]', wsl_conf)
+                self.assertIn('generateResolvConf = false', wsl_conf)
+                self.assertIn('generateHosts = false', wsl_conf)
+                self.assertIn('[interop]', wsl_conf)
+                self.assertIn('enabled = false', wsl_conf)
+                self.assertIn('appendWindowsPath = false', wsl_conf)
+                self.assertIn('[boot]', wsl_conf)
+                self.assertIn('command = ' + manager.boot_guard_command(), wsl_conf)
+                self.assertEqual(
+                    snapshots['resolv.conf'],
+                    b'nameserver 10.77.0.1\noptions timeout:2 attempts:1\n')
+                self.assertIn(b'127.0.1.1 fixture-wsl\n', snapshots['hosts'])
+                self.assertEqual(instance.snapshot.call_count, 3)
 
     def test_existing_emergency_table_blocks_both_boot_paths(self):
         for role in ('manager', 'distro-config'):
@@ -269,7 +826,9 @@ class GateTests(unittest.TestCase):
                 patch.object(manager, 'private_path'), \
                 patch.object(manager, 'Manager', side_effect=construct), \
                 patch.object(manager.sys, 'platform', 'linux'), \
-                patch.object(manager.os, 'geteuid', return_value=0), \
+                patch.object(manager.os, 'geteuid', return_value=0, create=True), \
+                patch.object(manager.os, 'O_NOFOLLOW', 0, create=True), \
+                patch.object(manager.os, 'environ', {}), \
                 patch.object(manager, 'boot_id', return_value='current'), \
                 patch.object(manager.os, 'readlink', return_value='current'), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -281,9 +840,13 @@ class GateTests(unittest.TestCase):
         instance = object.__new__(manager.Manager)
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.load = Mock(side_effect=AssertionError('private profile read'))
+        instance.save = Mock()
+        instance.load = Mock(side_effect=AssertionError('private profile read'))
         instance.event = Mock(return_value={'outcome': 'succeeded'})
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
                 patch.object(manager, 'command') as command:
             instance.boot_guard()
         instance.load.assert_not_called()
@@ -293,11 +856,17 @@ class GateTests(unittest.TestCase):
         instance = object.__new__(manager.Manager)
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.event = Mock(return_value={'outcome': 'succeeded'})
+        instance.save = Mock()
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='static'), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
                 patch.object(manager, 'command') as command:
             instance.boot_guard()
         command.assert_not_called()
+        # The sibling refresh persists this boot's shared-root identity.
+        self.assertEqual(instance.s['root_namespace'], 'current')
+        self.assertEqual(instance.s['boot_id'], 'current')
 
     def test_distro_config_unknown_table_gets_independent_emergency_deny(self):
         instance = object.__new__(manager.Manager)
@@ -345,9 +914,13 @@ class GateTests(unittest.TestCase):
         instance = object.__new__(manager.Manager)
         instance.s = {'role': 'distro-config', 'phase': 'DistroConfigured'}
         instance.load = Mock(side_effect=AssertionError('private profile read'))
+        instance.save = Mock()
+        instance.load = Mock(side_effect=AssertionError('private profile read'))
         instance.event = Mock(return_value={'outcome': 'succeeded'})
         with patch.object(manager, 'list_table', return_value=None), \
                 patch.object(manager, 'ensure_static_boot_guard', return_value='manager'), \
+                patch.object(manager, 'boot_id', return_value='current'), \
+                patch.object(manager.os, 'readlink', return_value='current'), \
                 patch.object(manager, 'ensure_boot_emergency_deny') as emergency:
             instance.boot_guard()
         instance.load.assert_not_called()
@@ -400,6 +973,22 @@ class GateTests(unittest.TestCase):
             data=('delete table inet cor_egress_guard\n' +
                   'table inet cor_egress_guard {}\n').encode())
 
+    def test_static_shape_is_adopted_before_ambiguous_manager_match(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'owner': 'owned', 'phase': 'Guarded', 'tables': {}}
+        instance.save = Mock()
+        instance.root_rules = Mock(return_value='closed-rules')
+        with patch.object(manager, 'table_hash', side_effect=['static', 'manager']), \
+                patch.object(manager, 'static_boot_matches', return_value=True), \
+                patch.object(manager, 'manager_table_matches', return_value=True) as manager_match, \
+                patch.object(manager, 'command') as command:
+            instance.install_manager_after_boot_guard()
+        manager_match.assert_not_called()
+        command.assert_called_once_with(
+            ['nft', '-f', '-'],
+            data=('delete table inet cor_egress_guard\nclosed-rules').encode())
+        self.assertEqual(instance.s['tables'], {'root': 'manager'})
+
     def test_running_manager_is_closed_before_guarded_phase(self):
         instance = object.__new__(manager.Manager)
         instance.s = {'owner': 'owned', 'phase': 'Running', 'tables': {}}
@@ -409,10 +998,222 @@ class GateTests(unittest.TestCase):
         instance.root_rules = Mock(return_value='closed-rules')
         instance.replace_table = Mock()
         with patch.object(manager, 'table_hash', return_value='manager'), \
-                patch.object(manager, 'manager_table_matches', return_value=True):
+                patch.object(manager, 'manager_table_matches', return_value=True), \
+                patch.object(manager, 'static_boot_matches', return_value=False):
             instance.install_manager_after_boot_guard()
         instance.replace_table.assert_called_once_with('closed-rules')
         self.assertEqual(instance.s['phase'], 'Guarded')
+
+    def test_boot_reconcile_closes_open_table_before_recording_guarded(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {
+            'owner': 'owned', 'phase': 'Running', 'root_namespace': 'old',
+            'boot_id': 'old', 'namespaces': {}, 'tables': {'root': 'opened'},
+            'uplink': 'eth0', 'root_sources': ['10.20.0.1/32'],
+            'forward_sources': [
+                {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+            ],
+        }
+        instance.p = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                      'resolver_ipv4': '10.77.0.1'}
+        instance.policy_routes = Mock(return_value=[])
+        instance.root_rules = Mock(return_value='closed-rules')
+        events = []
+        instance.replace_table = Mock(
+            side_effect=lambda rules: events.append(('close', instance.s['phase'], rules)))
+        instance.save = Mock(side_effect=lambda: events.append(('save', instance.s['phase'])))
+        with patch.object(manager.os, 'readlink', return_value='new'), \
+                patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager.Path, 'exists', return_value=False), \
+                patch.object(manager.Path, 'is_symlink', return_value=False), \
+                patch.object(manager, 'json_command', side_effect=[[], []]), \
+                patch.object(manager, 'table_hash', side_effect=['opened', 'closed']), \
+                patch.object(manager, 'table_classification', return_value='manager'), \
+                patch.object(manager, 'manager_table_matches_opened_install', return_value=True), \
+                patch.object(manager, 'static_boot_matches', return_value=True), \
+                patch.object(manager, 'list_table', return_value=None):
+            instance.boot_reconcile()
+        self.assertEqual(events[0], ('close', 'Running', 'closed-rules'))
+        self.assertEqual(instance.s['phase'], 'Guarded')
+        self.assertEqual(instance.s['tables'], {'root': 'closed'})
+
+    def test_cold_boot_running_journal_adopts_new_static_deny_before_manager_guard(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {
+            'owner': 'owned', 'generation': 71, 'role': 'manager',
+            'phase': 'Running', 'root_namespace': 'old', 'boot_id': 'old',
+            'namespaces': {manager.GW: {'inode': 'old'}},
+            'tables': {'root': 'old-opened', manager.GW: 'old-gateway'},
+            'attestation': 'old-audit', 'veth_index': 22,
+            'uplink': 'eth0',
+            'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+            'forward_sources': [
+                {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+            ],
+        }
+        instance.args = manager.parse(['guard'])
+        instance.p = None
+        instance.checks = []
+        instance.load = Mock()
+        instance.policy_routes = Mock(return_value=[])
+        instance.interop_guard = Mock()
+        tables, writes, saved = {}, [], []
+        instance.save = Mock(
+            side_effect=lambda: saved.append(json.loads(json.dumps(instance.s))))
+
+        def kernel(argv, ns=None, data=None, **kwargs):
+            self.assertIsNone(ns)
+            if argv[:5] == ['nft', '-j', 'list', 'table', 'inet']:
+                listed = tables.get(argv[5])
+                return subprocess.CompletedProcess(
+                    argv, 0 if listed is not None else 1,
+                    stdout=json.dumps(listed).encode() if listed is not None else b'',
+                    stderr=b'' if listed is not None else b'No such file or directory')
+            if argv == ['nft', '-f', '-']:
+                writes.append(data)
+                if data == manager.static_boot_rules().encode():
+                    fixture = manager_table_fixture()
+                    fixture['nftables'][0]['table']['comment'] = manager.STATIC_BOOT_COMMENT
+                else:
+                    self.assertEqual(
+                        data, ('delete table inet ' + manager.TABLE + '\n' +
+                               instance.root_rules()).encode())
+                    fixture = manager_table_fixture('owned')
+                tables[manager.TABLE] = fixture
+                return subprocess.CompletedProcess(argv, 0, stdout=b'', stderr=b'')
+            if argv in (['ip', '-j', 'link', 'show'],
+                        ['ip', '-4', '-j', 'rule', 'show']):
+                return subprocess.CompletedProcess(argv, 0, stdout=b'[]', stderr=b'')
+            self.fail('Unexpected cold-boot kernel operation: ' + repr(argv))
+
+        with patch.object(manager, 'command', side_effect=kernel), \
+                patch.object(manager, 'manager_table_matches_opened_install',
+                             return_value=False), \
+                patch.object(manager.os, 'readlink', return_value='new'), \
+                patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager, 'table_classification',
+                             side_effect=['absent', 'static', 'static', 'static']), \
+                patch.object(manager.Path, 'exists', return_value=False), \
+                patch.object(manager.Path, 'is_symlink', return_value=False):
+            result = instance.boot_guard()
+            final_hash = manager.table_hash()
+            self.assertIsNotNone(final_hash)
+        self.assertEqual(result['outcome'], 'succeeded')
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0], manager.static_boot_rules().encode())
+        self.assertEqual(saved[0]['phase'], 'Guarded')
+        self.assertNotEqual(saved[0]['tables']['root'], 'old-opened')
+        self.assertEqual(instance.s['tables'], {'root': final_hash})
+        self.assertEqual(instance.s['phase'], 'Guarded')
+        self.assertEqual(instance.s['namespaces'], {})
+        self.assertNotIn('attestation', instance.s)
+        self.assertNotIn('veth_index', instance.s)
+
+    def test_cold_boot_running_journal_closes_surviving_opened_manager_guard(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {
+            'owner': 'owned', 'generation': 71, 'role': 'manager',
+            'phase': 'Running', 'root_namespace': 'old', 'boot_id': 'old',
+            'namespaces': {manager.GW: {'inode': 'old'}},
+            'tables': {'root': 'old-opened', manager.GW: 'old-gateway'},
+            'attestation': 'old-audit', 'veth_index': 22,
+            'uplink': 'eth0',
+            'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+            'forward_sources': [
+                {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+            ],
+        }
+        instance.args = manager.parse(['guard'])
+        instance.p = dict(endpoint_ipv4='192.0.2.2', endpoint_port=51820,
+                          resolver_ipv4='10.77.0.1')
+        instance.checks = []
+        instance.load = Mock(side_effect=lambda: setattr(instance, 'p', {
+            'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+            'resolver_ipv4': '10.77.0.1'}))
+        instance.rollback_attempted = False
+        instance.dirty = False
+        instance.close_requested = True
+        instance.policy_routes = Mock(return_value=[])
+        instance.interop_guard = Mock()
+        runtime = {'uplink': 'eth0', 'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+                   'forward_sources': [
+                       {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+                   ]}
+        policy = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                  'resolver_ipv4': '10.77.0.1'}
+        instance.s['tables']['root'] = manager.digest(
+            manager.encode(manager.clean_nft(manager_table_fixture(
+                'owned', True, instance.s, policy))))
+        opened = manager_table_fixture('owned', True, runtime, policy)
+        tables = {manager.TABLE: opened, manager.BOOT_EMERGENCY: None}
+        writes, saved = [], []
+        instance.save = Mock(
+            side_effect=lambda: saved.append(json.loads(json.dumps(instance.s))))
+
+        def kernel(argv, ns=None, data=None, **kwargs):
+            self.assertIsNone(ns)
+            if argv[:5] == ['nft', '-j', 'list', 'table', 'inet']:
+                key = argv[5]
+                listed = tables.get(key)
+                return subprocess.CompletedProcess(
+                    argv, 0 if listed is not None else 1,
+                    stdout=json.dumps(listed).encode() if listed is not None else b'',
+                    stderr=b'' if listed is not None else b'No such file or directory')
+            if argv == ['nft', '-f', '-'] and data == manager.boot_emergency_rules().encode():
+                self.fail('An existing opened manager guard must be closed before emergency recovery.')
+            if argv == ['nft', '-f', '-']:
+                writes.append(data)
+                if data == manager.static_boot_rules().encode():
+                    self.fail('An existing opened manager guard must be closed, not shadowed.')
+                self.assertEqual(
+                    data, ('delete table inet ' + manager.TABLE + '\n' +
+                           instance.root_rules()).encode())
+                tables[manager.TABLE] = manager_table_fixture('owned')
+                return subprocess.CompletedProcess(argv, 0, stdout=b'', stderr=b'')
+            if argv in (['ip', '-j', 'link', 'show'],
+                        ['ip', '-4', '-j', 'rule', 'show']):
+                return subprocess.CompletedProcess(argv, 0, stdout=b'[]', stderr=b'')
+            if argv == ['ip', '-d', '-j', 'link', 'show', 'dev', 'eth0']:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps([{
+                        'ifname': 'eth0', 'flags': ['UP'], 'linkinfo': {}
+                    }]).encode(), stderr=b'')
+            if argv == ['ip', '-4', '-j', 'route', 'get', '192.0.2.2']:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps([{'dev': 'eth0'}]).encode(), stderr=b'')
+            if argv == ['ip', '-j', 'link', 'show']:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps([
+                        {'ifname': 'eth0', 'flags': ['UP']},
+                    ]).encode(), stderr=b'')
+            self.fail('Unexpected cold-boot kernel operation: ' + repr(argv))
+
+        with patch.object(manager, 'command', side_effect=kernel), \
+                patch.object(manager, 'manager_table_matches_opened_install',
+                             return_value=True), \
+                patch.object(manager, 'static_boot_matches', return_value=True), \
+                patch.object(manager, 'table_classification', return_value='manager'), \
+                patch.object(manager.os, 'readlink', return_value='new'), \
+                patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager.Path, 'exists', return_value=False), \
+                patch.object(manager.Path, 'is_symlink', return_value=False):
+            def load_profile():
+                instance.s['profile'] = '/etc/cor-egress/profile.json'
+                instance.s['profile_hash'] = 'opened-profile-hash'
+                instance.p = policy
+            instance.load = load_profile
+            result = instance.boot_guard()
+            final_hash = manager.table_hash()
+            self.assertIsNotNone(final_hash)
+        self.assertEqual(result['outcome'], 'succeeded')
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(instance.s['tables'], {'root': final_hash})
+        self.assertEqual(instance.s['phase'], 'Guarded')
+        self.assertEqual(instance.s['namespaces'], {})
+        self.assertNotIn('attestation', instance.s)
+        self.assertNotIn('veth_index', instance.s)
+        self.assertNotIn('reconciled_from_running', instance.s)
+        self.assertNotIn('reconciled_root_hash', instance.s)
 
     def test_unknown_table_never_gets_overwritten(self):
         instance = object.__new__(manager.Manager)
@@ -426,6 +1227,89 @@ class GateTests(unittest.TestCase):
             with self.assertRaisesRegex(manager.Blocked, 'preserving'):
                 instance.install_manager_after_boot_guard()
         command.assert_not_called()
+
+    def test_cold_boot_negative_matrix_never_deletes_unproven_manager_table(self):
+        """Only the exact journal/profile/runtime match may authorize deletion."""
+        policy = {'endpoint_ipv4': '192.0.2.2', 'endpoint_port': 51820,
+                  'resolver_ipv4': '10.77.0.1'}
+        runtime = {
+            'uplink': 'eth0',
+            'root_sources': ['10.20.0.1/32', manager.BUS_ROOT_IP + '/32'],
+            'forward_sources': [
+                {'interface': 'docker0', 'source_cidr': '172.18.0.0/16'}
+            ],
+        }
+        valid_items = manager_table_fixture('owned', True, runtime, policy)
+        valid_hash = manager.digest(manager.encode(manager.clean_nft(valid_items)))
+        base_state = {
+            'owner': 'owned', 'role': 'manager', 'phase': 'Running',
+            'profile': '/etc/cor-egress/profile.json',
+            'uplink': 'eth0', 'tables': {'root': valid_hash},
+        }
+        base_state.update(runtime)
+        cases = {
+            'journal hash mismatch': (
+                {**base_state, 'tables': {'root': 'different'}},
+                valid_items, policy, False, valid_hash),
+            'missing profile': (
+                {**base_state, 'profile': '/missing/profile.json'},
+                valid_items, FileNotFoundError(), False, valid_hash),
+            'foreign table comment': (base_state, manager_table_fixture(
+                'foreign', True, runtime, policy), policy, False, valid_hash),
+            'transport namespace missing': (
+                base_state, valid_items, policy, False,
+                valid_hash),
+            'endpoint mismatch': (
+                base_state, manager_table_fixture(
+                    'owned', True, runtime,
+                    {**policy, 'endpoint_ipv4': '192.0.2.99'}), policy, False,
+                manager.digest(manager.encode(manager.clean_nft(
+                    manager_table_fixture(
+                        'owned', True, runtime,
+                        {**policy, 'endpoint_ipv4': '192.0.2.99'}))))),
+            'root route mismatch': (
+                base_state, manager_table_fixture(
+                    'owned', True,
+                    {**runtime, 'root_sources': ['10.20.0.99/32',
+                                                 manager.BUS_ROOT_IP + '/32']},
+                    policy), policy, False,
+                manager.digest(manager.encode(manager.clean_nft(
+                    manager_table_fixture(
+                        'owned', True,
+                        {**runtime, 'root_sources': ['10.20.0.99/32',
+                                                     manager.BUS_ROOT_IP + '/32']},
+                        policy))))),
+            'not running phase': (
+                {**base_state, 'phase': 'Guarded'}, valid_items, policy, False,
+                valid_hash),
+            'distro config role': (
+                {**base_state, 'role': 'distro-config'}, valid_items, policy,
+                False, valid_hash),
+            'exact surviving manager': (
+                base_state, valid_items, policy, True, valid_hash),
+        }
+        for name, (state, listed_items, loaded_profile, expected,
+                   observed_hash) in cases.items():
+            with self.subTest(name=name):
+                with patch.object(
+                        manager, 'table_items', return_value=listed_items['nftables']), \
+                        patch.object(
+                            manager, 'table_hash',
+                            return_value=observed_hash), \
+                        patch.object(manager, 'read_profile',
+                                     side_effect=loaded_profile
+                                     if isinstance(loaded_profile, Exception)
+                                     else loaded_profile), \
+                        patch.object(manager, 'manager_table_matches',
+                                     return_value=True), \
+                        patch.object(manager, 'shared_manager_runtime_matches',
+                                     return_value=False
+                                     if name == 'transport namespace missing'
+                                     else True), \
+                        patch.object(manager, 'command') as command:
+                    observed = manager.manager_table_matches_opened_install(state)
+                self.assertEqual(observed, expected, name)
+                command.assert_not_called()
 
     def test_static_boot_rules_have_owned_comment_and_drop_chains(self):
         rules = manager.static_boot_rules()
@@ -478,6 +1362,25 @@ class GateTests(unittest.TestCase):
                 patch.object(manager, 'table_classification', return_value='static'), \
                 patch.object(manager, 'list_table', return_value=None):
             instance.boot_reconcile()
+        self.assertEqual(instance.s['tables'], {'root': 'static'})
+        self.assertEqual(instance.s['namespaces'], {})
+
+    def test_boot_reconcile_clears_absent_guard_hash(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'phase': 'Guarded', 'role': 'manager', 'root_namespace': 'old',
+                      'boot_id': 'old', 'namespaces': {}, 'tables': {'root': 'stale'}}
+        instance.policy_routes = Mock(return_value=[])
+        instance.save = Mock()
+        with patch.object(manager.os, 'readlink', return_value='new'), \
+                patch.object(manager, 'boot_id', return_value='new'), \
+                patch.object(manager.Path, 'exists', return_value=False), \
+                patch.object(manager.Path, 'is_symlink', return_value=False), \
+                patch.object(manager, 'json_command', side_effect=[[], []]), \
+                patch.object(manager, 'table_hash', return_value=None), \
+                patch.object(manager, 'table_classification', return_value='absent'), \
+                patch.object(manager, 'list_table', return_value=None):
+            instance.boot_reconcile()
+        self.assertEqual(instance.s['tables'], {})
         instance.save.assert_called_once_with()
         instance.s = {'phase': 'Guarded', 'role': 'manager', 'root_namespace': 'old',
                       'boot_id': 'old', 'namespaces': {}, 'tables': {}}
@@ -529,6 +1432,7 @@ class GateTests(unittest.TestCase):
         with patch.object(manager, 'list_table', return_value=listed):
             self.assertFalse(manager.manager_table_matches('owned'))
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Requires Linux POSIX permission bits')
     def test_sandbox_staging_remains_traversable_under_private_umask(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(manager, 'private_path'):
             before = os.umask(0o077)
@@ -619,7 +1523,12 @@ class GateTests(unittest.TestCase):
             self.assertEqual(argv[0], "unshare")
             for flag in ("--net", "--mount", "--pid", "--fork", "--mount-proc", "--kill-child=SIGKILL"):
                 self.assertIn(flag, argv)
-            self.assertIn("--_isolated-parent", argv)
+            # The mount namespace must exist before the launcher can stage the
+            # manager outside a private tmpfs. Only the internal exec fragment
+            # names the parent-namespace proof argument.
+            exec_fragment = argv[argv.index("-c") + 1]
+            self.assertIn("--_isolated-parent=", exec_fragment)
+            self.assertEqual(argv[-1], '{"net": 1, "mnt": 2, "pid": 3}')
             mounts.assert_not_called()
             fixture.assert_not_called()
             run.assert_called_once()
@@ -717,6 +1626,8 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("127.0.0.1 localhost", source)
         self.assertNotIn("host.docker.internal", source)
 
+    @unittest.skipUnless(manager.platform.machine().lower() in manager.AUDIT_ARCHES,
+                         'Requires a supported Linux architecture name')
     def test_sandbox_seccomp_denies_namespace_entry_and_creation(self):
         program = manager.seccomp_filter()
         instructions = [struct.unpack_from("HBBI", program, offset)

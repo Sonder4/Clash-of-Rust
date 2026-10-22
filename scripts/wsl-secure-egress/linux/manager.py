@@ -7,6 +7,7 @@ Root is the trusted administrator. The workload never receives root privileges.
 import argparse
 import base64
 import configparser
+import errno
 import fcntl
 import hashlib
 import ipaddress
@@ -50,8 +51,14 @@ PREF_BUSINESS_MAIN = 10073
 PREF_DEFAULT_DENY = 10074
 TUNNEL_MTU = 1380
 WG_PORT = 51821
+MANAGER_LOCK_WAIT_SECONDS = 15
+MANAGER_LOCK_POLL_SECONDS = 0.05
 INTEROP = Path('/proc/sys/fs/binfmt_misc/WSLInterop')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'LANG': 'C'}
+ISOLATED_TEST_ENV = (
+    os.environ.get('CI') == 'true'
+    and os.environ.get('COR_EGRESS_ISOLATED_CI') == '1'
+)
 SECCOMP_ARCH_OFFSET = 4
 SECCOMP_NR_OFFSET = 0
 SECCOMP_ARG0_OFFSET = 16
@@ -179,6 +186,27 @@ def command(argv, ns=None, data=None, okay=False, timeout=25):
                       f'{result.returncode}, ns={ns or "root"}); guard retained; '
                       'no command output disclosed.')
     return result
+
+
+def acquire_manager_lock(lock):
+    """Wait briefly for a boot guard or action already holding the lock.
+
+    WSL runs the configured boot command concurrently with the first explicit
+    start. A non-blocking flock would turn that harmless startup overlap into
+    a spurious failed start. Keep the wait bounded so a genuinely stuck
+    helper still fails closed and the caller can report the retained guard.
+    """
+    deadline = time.monotonic() + MANAGER_LOCK_WAIT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            if time.monotonic() >= deadline:
+                raise Blocked('Another manager operation remained active; retry refused.') from None
+            time.sleep(MANAGER_LOCK_POLL_SECONDS)
 
 
 def seccomp_filter():
@@ -339,14 +367,18 @@ def table_items(name):
     return listed.get('nftables', [])
 
 
-def table_classification(name):
+def table_classification(name, state=None):
     """Classify the shared guard without ever mutating an unknown table."""
     if list_table(name) is None:
         return 'absent'
+    if (name == TABLE and isinstance(state, dict) and
+            manager_table_matches_opened_install(state)):
+        return 'manager'
     if name == TABLE and static_boot_matches():
         return 'static'
-    if name == TABLE and manager_table_matches_installed():
-        return 'manager'
+    if name == TABLE:
+        if state is None and manager_table_matches_installed():
+            return 'manager'
     return 'unknown'
 
 
@@ -638,8 +670,225 @@ def manager_table_matches(owner, opened=False, state=None, profile=None):
         return False
 
 
+def shared_guard_profile(profile):
+    """Retain only public policy constraints, never another distro's keys."""
+    fields = ('endpoint_ipv4', 'endpoint_port', 'resolver_ipv4')
+    policy = {name: profile[name] for name in fields}
+    for name in ('endpoint_ipv4', 'resolver_ipv4'):
+        address = ipaddress.IPv4Address(policy[name])
+        if address.is_unspecified or address.is_multicast or address.is_loopback:
+            raise ValueError('Invalid shared guard IPv4 constraint')
+        policy[name] = str(address)
+    if type(policy['endpoint_port']) is not int or not 1 <= policy['endpoint_port'] <= 65535:
+        raise ValueError('Invalid shared guard port constraint')
+    return policy
+
+
+def valid_uplink_interface(name):
+    """Reject Linux software/tunnel links as the cleartext WireGuard uplink."""
+    if (not isinstance(name, str) or
+            not re.fullmatch(r'[A-Za-z0-9_.:-]{1,15}', name) or
+            name in ('lo', ROOT_IF, BUS_IF)):
+        return False
+    # These are common Linux virtual-link kinds and host-created virtual
+    # adapters. The kernel link kind check below remains authoritative when
+    # iproute2 exposes it, while the names cover WSL builds that omit kind.
+    if name.lower().startswith((
+            'br-', 'docker', 'podman', 'cni', 'veth', 'virbr', 'tun', 'tap',
+            'wg', 'tailscale', 'zt', 'dummy', 'ifb', 'macvtap', 'vmnet',
+            'vboxnet', 'vethernet', 'hyper-v', 'cor-')):
+        return False
+    try:
+        links = json_command(['ip', '-d', '-j', 'link', 'show', 'dev', name])
+        if len(links) != 1 or links[0].get('ifname') != name:
+            return False
+        kind = links[0].get('linkinfo', {}).get('info_kind')
+        if (kind == 'veth' and ISOLATED_TEST_ENV and
+                name == 'fixture-uplink'):
+            # The disposable kernel test uses a veth solely to provide a
+            # reachable on-link endpoint. This exact exception requires both
+            # explicit test gates and is evaluated before main() sanitizes the
+            # helper environment. Production WSL eth0 never matches it.
+            return True
+        if kind is not None and kind not in ('device',):
+            return False
+        return True
+    except (Blocked, KeyError, TypeError, ValueError, OSError):
+        return False
+
+
+def shared_manager_runtime_matches(policy, uplink):
+    """Require the opened shared nft exception to match a live WG data plane."""
+    try:
+        if not valid_uplink_interface(uplink):
+            return False
+        route = json_command(['ip', '-4', '-j', 'route', 'get',
+                              policy['endpoint_ipv4']])
+        if len(route) != 1 or route[0].get('dev') != uplink:
+            return False
+        root_links = json_command(['ip', '-j', 'link', 'show'])
+        if any(not any(link.get('ifname') == iface and 'UP' in link.get('flags', [])
+                        for link in root_links)
+               for iface in (ROOT_IF, BUS_IF)):
+            return False
+        transport_links = json_command(['ip', '-j', 'link', 'show'], ns=TRANSPORT)
+        gateway_links = json_command(['ip', '-j', 'link', 'show'], ns=GW)
+        if {link.get('ifname') for link in transport_links} != {'lo', NS_IF}:
+            return False
+        if {link.get('ifname') for link in gateway_links} != {'lo', 'wg0', GW_BUS_IF}:
+            return False
+        if not all(any(link.get('ifname') == iface and 'UP' in link.get('flags', [])
+                       for link in gateway_links)
+                   for iface in ('wg0', GW_BUS_IF)):
+            return False
+        endpoint = command(['wg', 'show', 'wg0', 'endpoints'], ns=GW).stdout.decode().split()
+        allowed = command(['wg', 'show', 'wg0', 'allowed-ips'], ns=GW).stdout.decode().split()
+        # The public peer key is intentionally absent from the sibling
+        # journal; require one configured peer and the pinned endpoint.
+        if len(endpoint) != 2 or endpoint[1] != f"{policy['endpoint_ipv4']}:{policy['endpoint_port']}":
+            return False
+        if len(allowed) != 2 or allowed[1] != '0.0.0.0/0':
+            return False
+        transport_routes = json_command(
+            ['ip', '-4', '-j', 'route', 'show'], ns=TRANSPORT)
+        if not any(route.get('dst') == policy['endpoint_ipv4'] + '/32' and
+                   route.get('dev') == NS_IF and route.get('gateway') == ROOT_IP
+                   for route in transport_routes):
+            return False
+        gateway_routes = json_command(['ip', '-4', '-j', 'route', 'show'], ns=GW)
+        if not any(route.get('dst', 'default') == 'default' and route.get('dev') == 'wg0'
+                   for route in gateway_routes):
+            return False
+        ipv6_routes = json_command(['ip', '-6', '-j', 'route', 'show'], ns=GW)
+        if not any(route.get('dst', 'default') == 'default' and
+                   route.get('type') == 'unreachable' for route in ipv6_routes):
+            return False
+        return True
+    except (Blocked, IndexError, KeyError, TypeError, ValueError, OSError):
+        return False
+
+
+def shared_root_runtime_matches(policy, uplink):
+    """Validate the shared root path without opening a sibling's netns files.
+
+    WSL distributions share the root network namespace, but each distro has
+    its own /run/netns mount. A sibling boot hook therefore cannot inspect the
+    manager's private transport and gateway namespace bind mounts. The exact
+    root guard, veths, policy route, and endpoint route still provide a safe
+    read-only proof that the shared runtime is present; the manager remains
+    responsible for the private namespace checks.
+    """
+    try:
+        if not valid_uplink_interface(uplink):
+            return False
+        route = json_command(
+            ['ip', '-4', '-j', 'route', 'get', policy['endpoint_ipv4'],
+             'from', TRANSPORT_IP, 'iif', ROOT_IF])
+        if len(route) != 1 or route[0].get('dev') != uplink:
+            return False
+        links = json_command(['ip', '-j', 'link', 'show'])
+        if any(not any(link.get('ifname') == iface and
+                       'UP' in link.get('flags', [])
+                       for link in links)
+               for iface in (ROOT_IF, BUS_IF)):
+            return False
+        routes = json_command(['ip', '-4', '-N', '-j', 'route',
+                               'show', 'table', str(ROUTE_TABLE)])
+        if not any(route.get('dev') == BUS_IF and
+                   route.get('gateway') == BUS_GW_IP and
+                   route.get('dst', 'default') == 'default'
+                   for route in routes):
+            return False
+        if not any(route.get('dst') == 'default' and
+                   route.get('type') == 'unreachable'
+                   for route in routes):
+            return False
+        rules = json_command(['ip', '-4', '-j', 'rule', 'show'])
+        return any(rule.get('priority') == PREF_DEFAULT_DENY and
+                   str(rule.get('table')) == str(ROUTE_TABLE)
+                   for rule in rules)
+    except (Blocked, IndexError, KeyError, TypeError, ValueError, OSError):
+        return False
+
+
+def shared_manager_table_matches(state, items):
+    """Verify a sibling manager's exact safe policy without its private files.
+
+    WSL distros share the root network namespace, but not /var/lib. A sibling
+    cannot use its own journal owner/hash as the manager's identity. Its
+    root-private configure journal instead pins the public endpoint/resolver;
+    all dynamic selectors are recovered from the table and the complete table
+    must then equal the generated manager rules. This grants no ownership or
+    permission to replace the table.
+    """
+    try:
+        if state.get('phase') != 'DistroConfigured':
+            return False
+        tables = [item['table'] for item in items if set(item) == {'table'}]
+        if len(tables) != 1:
+            return False
+        comment = tables[0].get('comment')
+        # nft 1.0.2 omits comments, so an absent comment is accepted only
+        # alongside the exact generated selectors, hooks, policies and actions.
+        owner = 'shared'
+        if comment is not None:
+            if not isinstance(comment, str) or not comment.startswith('cor-egress:'):
+                return False
+            owner = comment[len('cor-egress:'):]
+            if not owner:
+                return False
+        if manager_table_matches(owner):
+            return True
+        policy = shared_guard_profile(state['shared_guard_profile'])
+        output = [item['rule']['expr'] for item in items
+                  if item.get('rule', {}).get('chain') == 'output']
+        forward = [item['rule']['expr'] for item in items
+                   if item.get('rule', {}).get('chain') == 'forward']
+
+        def ipv4_network(value):
+            if isinstance(value, str):
+                return ipaddress.IPv4Network(value + '/32', strict=True)
+            prefix = value['prefix']
+            if set(value) != {'prefix'} or set(prefix) != {'addr', 'len'}:
+                raise ValueError('Unexpected address expression')
+            return ipaddress.IPv4Network(
+                str(prefix['addr']) + '/' + str(prefix['len']), strict=True)
+
+        uplink = forward[1][1]['match']['right']
+        if not valid_uplink_interface(uplink):
+            return False
+        source = output[2][1]['match']['right']
+        values = source['set'] if isinstance(source, dict) and set(source) == {'set'} else [source]
+        networks = [ipv4_network(value) for value in values]
+        if (not networks or len(set(networks)) != len(networks) or
+                any(network.prefixlen != 32 or network.network_address.is_unspecified or
+                    network.network_address.is_loopback or network.network_address.is_multicast
+                    for network in networks) or
+                ipaddress.IPv4Network(BUS_ROOT_IP + '/32') not in networks):
+            return False
+        sources = []
+        for expressions in output[6:-1]:
+            iface = expressions[0]['match']['right']
+            if not isinstance(iface, str) or not re.fullmatch(
+                    r'[A-Za-z0-9_.:-]{1,15}', iface):
+                return False
+            network = ipv4_network(expressions[2]['match']['right'])
+            if (iface == uplink or not network.is_private or network.prefixlen < 8 or
+                    network.is_loopback or network.is_link_local):
+                return False
+            sources.append({'interface': iface, 'source_cidr': str(network)})
+        if len({(item['interface'], item['source_cidr']) for item in sources}) != len(sources):
+            return False
+        runtime = {'uplink': uplink, 'root_sources': [str(network) for network in networks],
+                   'forward_sources': sources}
+        return (manager_table_matches(owner, opened=True, state=runtime, profile=policy) and
+                shared_root_runtime_matches(policy, uplink))
+    except (IndexError, KeyError, TypeError, ValueError):
+        return False
+
+
 def manager_table_matches_installed():
-    """Recognize only a table whose comment owner matches local private state."""
+    """Recognize exact rules using this distro's root-private installation."""
     items = table_items(TABLE)
     if items is None:
         return False
@@ -656,6 +905,8 @@ def manager_table_matches_installed():
         return False
     if not isinstance(state, dict):
         return False
+    if state.get('role') == 'distro-config':
+        return shared_manager_table_matches(state, items)
     owner = state.get('owner')
     phase = state.get('phase')
     if not isinstance(owner, str) or not owner:
@@ -673,6 +924,33 @@ def manager_table_matches_installed():
     if phase in ('Guarded', 'Installing'):
         return manager_table_matches(owner, opened=False)
     return False
+
+
+def manager_table_matches_opened_install(state):
+    """Prove a surviving opened manager table is safe to replace closed."""
+    if not isinstance(state, dict):
+        return False
+    owner = state.get('owner')
+    if (state.get('role') == 'distro-config' or
+            not isinstance(owner, str) or not owner or
+            state.get('phase') != 'Running'):
+        return False
+    items = table_items(TABLE)
+    if items is None:
+        return False
+    table = next((item.get('table') for item in items if 'table' in item), None)
+    if not table:
+        return False
+    comment = table.get('comment')
+    if comment is not None and comment != 'cor-egress:' + owner:
+        return False
+    try:
+        profile = read_profile(state['profile'])
+    except (Blocked, KeyError, TypeError, ValueError, OSError):
+        return False
+    return (table_hash() == state.get('tables', {}).get('root') and
+            manager_table_matches(owner, opened=True, state=state, profile=profile) and
+            shared_manager_runtime_matches(profile, state.get('uplink')))
 
 
 def boot_guard_command():
@@ -748,21 +1026,65 @@ class Manager:
         routes = self.policy_routes()
         guard = table_hash()
         emergency = list_table(BOOT_EMERGENCY)
-        guard_class = table_classification(TABLE)
+        guard_class = table_classification(TABLE, self.s)
+        # During an in-place cold boot the journal stays Running, so the
+        # generic classified helper cannot authenticate an opened table from
+        # disk without changing phase first. Prove it against this generation's
+        # exact journal and profile before replacing it with the closed guard.
+        was_running = self.s.get('phase') == 'Running'
+        if (guard_class == 'unknown' and was_running and
+                manager_table_matches_opened_install(self.s)):
+            guard_class = 'manager'
         if any(x.get('priority') in RULE_PREFS for x in rules) or routes or (
                 guard_class not in ('absent', 'static', 'manager')) or emergency is not None:
             raise Blocked('New namespace already contains reserved policy objects; no ownership assumed.')
+        # A Running journal means the shared table may still contain the
+        # endpoint exception from the previous namespace. Close that table
+        # while the old state and ownership hash are still available. The
+        # journal must never reach Guarded while an opened manager policy is
+        # left behind for the next distro to inherit.
+        # boot_guard may already have created the exact static deny in a
+        # fresh VM. That table is closed and its new hash is adopted below;
+        # only a surviving opened manager table needs closing here.
+        if was_running and guard_class == 'manager':
+            # install_manager_after_boot_guard runs after this method and
+            # must recognize the exact closed replacement rather than retest
+            # the old opened policy against the now-mutated journal phase.
+            self.s['reconciled_from_running'] = True
+            # replace_table performs the ownership CAS before deleting and
+            # recreating the table in one nft transaction.
+            self.replace_table(self.root_rules())
+            guard = table_hash()
+            if guard is None or not static_boot_matches():
+                raise Blocked('Cold-boot replacement did not produce an exact closed guard.')
         self.s.setdefault('previous_boots', []).append({
             'root_namespace': self.s['root_namespace'], 'phase': self.s['phase'],
             'boot_id': self.s.get('boot_id'),
             'runtime_hash': digest(encode({k: self.s.get(k) for k in ('namespaces', 'routing', 'sysctls', 'tables')}))})
-        for key in ('routing', 'sysctls', 'veth_index', 'business_veth_index', 'emergency', 'attestation'):
+        for key in ('routing', 'sysctls', 'veth_index', 'business_veth_index', 'emergency',
+                    'attestation'):
             self.s.pop(key, None)
         self.s['namespaces'] = {}
-        self.s['tables'] = {}
+        # The shared guard is the only object that survives a WSL root
+        # namespace recreation. Pin the exact table we just accepted so status
+        # and start can use the normal CAS check. Interface and per-namespace
+        # table records are deliberately cleared because their ifindexes and
+        # netns inodes cannot survive the reboot.
+        self.s['tables'] = {'root': guard} if guard is not None else {}
         self.s['root_namespace'] = current
         self.s['boot_id'] = boot_id()
         self.s['phase'] = 'Guarded'
+        # Only retain the reconciliation signal if this boot still needs the
+        # adoption pass to recognize the closed replacement it just created.
+        keep_reconciled = bool(self.s.get('reconciled_from_running'))
+        if not keep_reconciled:
+            self.s.pop('reconciled_from_running', None)
+        else:
+            # boot_guard calls install_manager_after_boot_guard immediately
+            # after reconciliation. That step consumes this one-shot signal
+            # and saves the final journal, so a crash cannot leave stale
+            # reconciliation authority behind.
+            self.s['reconciled_root_hash'] = guard
         self.save()
 
     def event(self, action, outcome, message, phase=None):
@@ -813,6 +1135,8 @@ class Manager:
         actual = table_hash()
         if actual is None:
             return False
+        if self.s.get('tables', {}).get('root') == actual:
+            return False
         if static_boot_matches():
             return True
         if manager_table_matches(self.s.get('owner'), opened=self.s.get('phase') == 'Running',
@@ -826,6 +1150,44 @@ class Manager:
         if actual is None:
             self.replace_table(self.root_rules(), initial=True)
             return
+        # On WSL nft 1.0.2 table comments are omitted from JSON. The closed
+        # manager policy is intentionally the same deny shape as the fixed
+        # static boot policy, so manager_table_matches cannot distinguish the
+        # two from rules alone. Prefer the static classification here and
+        # adopt it explicitly, recording the hash in the manager journal.
+        # A cold-boot reconciliation may have closed a surviving opened
+        # manager table immediately before this adoption pass. In that path
+        # the exact new hash is already journaled, so accept only that hash.
+        expected = self.s.get('reconciled_root_hash')
+        if expected and table_hash() == expected and static_boot_matches():
+            # In WSL's nft 1.0.2 the manager's closed and static rules can
+            # canonicalize to the same JSON shape. The hash was recorded after
+            # the authenticated delete/create transaction, so this exact pair
+            # is the ownership proof for the one-shot adoption.
+            self.dirty = True
+            self.s.setdefault('tables', {})['root'] = expected
+            self.s.pop('reconciled_from_running', None)
+            self.s.pop('reconciled_root_hash', None)
+            self.save()
+            return
+        if static_boot_matches():
+            if self.s.get('tables', {}).get('root') == actual:
+                # The journal's exact root hash authenticates a compact closed
+                # manager guard even when nft 1.0.2 renders it like the fixed
+                # static first-start deny.
+                self.dirty = True
+                self.s.setdefault('tables', {})['root'] = actual
+                self.save()
+                return
+            self.dirty = True
+            command(['nft', '-f', '-'], data=(
+                'delete table inet ' + TABLE + '\n' + self.root_rules()).encode())
+            self.s.setdefault('tables', {})['root'] = table_hash()
+            self.save()
+            return
+        if (self.s.get('tables', {}).get('root') == actual and
+                manager_table_matches(self.s.get('owner'), opened=False)):
+            return
         running = self.s.get('phase') == 'Running'
         if manager_table_matches(self.s.get('owner'), opened=running,
                                  state=self.s, profile=getattr(self, 'p', None)):
@@ -835,13 +1197,7 @@ class Manager:
                 self.s['phase'] = 'Guarded'
                 self.replace_table(self.root_rules())
             return
-        if not static_boot_matches():
-            raise Blocked('Static boot guard changed before adoption; preserving it.')
-        self.dirty = True
-        command(['nft', '-f', '-'], data=(
-            'delete table inet ' + TABLE + '\n' + self.root_rules()).encode())
-        self.s.setdefault('tables', {})['root'] = table_hash()
-        self.save()
+        raise Blocked('Static boot guard changed before adoption; preserving it.')
 
     def root_rules(self, opened=False):
         forward, nat, output = '', '', ''
@@ -1150,6 +1506,7 @@ class Manager:
         self.p = p
         self.s = {'schema': 1, 'owner': str(uuid.uuid4()), 'generation': self.args.generation,
                   'phase': 'ConfiguringDistro', 'backend': p['backend'], 'files': {},
+                  'shared_guard_profile': shared_guard_profile(p) if p['backend'] == 'wireguard' else {},
                   'role': 'distro-config', 'root_namespace': os.readlink('/proc/self/ns/net'), 'boot_id': boot_id()}
         self.save()
         self.distro_prepare()
@@ -1158,6 +1515,31 @@ class Manager:
         return self.event('configure', 'Succeeded', 'Owned distro DNS/interop configured; effective restart/runtime coverage must be audited by Windows.')
 
     def restore_config(self):
+        # Windows records the recovery target before invoking configure. A
+        # failed launch/profile validation can therefore leave no transaction
+        # for this generation. configure saves its private journal before its
+        # first file change, so only absence or a clean older retired distro
+        # journal proves that this invocation has nothing to restore.
+        generation = self.args.generation
+        if type(generation) is not int or generation < 1:
+            raise Blocked('restore-config requires a positive generation.')
+        absent = not self.s and not self.file.exists() and not self.file.is_symlink()
+        retired = (
+            type(self.s.get('schema')) is int and self.s['schema'] == 1
+            and self.s.get('role') == 'distro-config'
+            and self.s.get('phase') == 'DistroRestored'
+            and type(self.s.get('generation')) is int
+            and 0 < self.s['generation'] < generation
+            and self.s.get('files') == {}
+            and not any(self.s.get(key) for key in ('tables', 'namespaces', 'routing', 'sysctls'))
+        )
+        if self.args.allow_unconfigured and (absent or retired):
+            event = self.event('restore-config', 'Succeeded',
+                               'No distro configuration transaction began for the requested generation.',
+                               phase='DistroUnconfigured')
+            event['generation'] = generation
+            event['facts'] = {'configuration_restore': 'not_started'}
+            return event
         self.same_generation()
         if self.s.get('role') != 'distro-config':
             raise Blocked('restore-config is only for a per-distro configuration journal.')
@@ -1323,6 +1705,8 @@ class Manager:
 
     def start(self):
         self.load()
+        if list_table(BOOT_EMERGENCY) is not None:
+            raise Blocked('Existing boot emergency table preserved; explicit recovery is required.')
         self.assert_table()
         if self.p['backend'] == 'tailscale':
             raise Blocked('Tailscale full-WSL cold-start boundary is unproven; backend blocked.')
@@ -1334,16 +1718,11 @@ class Manager:
             raise Blocked('Stale owned namespaces; stop before retrying start.')
         route = json_command(['ip', '-4', '-j', 'route', 'get', self.p['endpoint_ipv4']])[0]
         uplink = route.get('dev', '')
-        if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,15}', uplink) or uplink in ('lo', ROOT_IF):
+        if not valid_uplink_interface(uplink):
             raise Blocked('Endpoint uplink must be an existing physical/WSL interface.')
         for iface in (ROOT_IF, BUS_IF):
             if command(['ip', 'link', 'show', iface], okay=True).returncode == 0:
                 raise Blocked('Transport/business veth name collision.')
-        # The endpoint must use the ordinary WSL uplink. Refuse a route that
-        # already enters an owned or Docker bridge so the encrypted socket
-        # cannot loop through protected forwarding.
-        if re.match(r'^(?:docker|br-|virbr|cor-)', uplink):
-            raise Blocked('Endpoint route enters a container or owned bridge.')
         self.s['uplink'] = uplink
         self.s['attestation'] = att
         self.s['phase'] = 'Starting'
@@ -1439,6 +1818,14 @@ class Manager:
             desired = [(None, name, key, value) for name in root_ifaces for key, value in [('forwarding', '1'), ('rp_filter', '2')]]
             desired += [(GW, name, 'forwarding', '1') for name in (GW_BUS_IF, 'wg0')]
             self.s.setdefault('sysctls', [])
+            global_path = '/proc/sys/net/ipv4/ip_forward'
+            before = command(['cat', global_path], ns=GW).stdout.decode().strip()
+            self.s['sysctls'].append({
+                'namespace': GW, 'path': global_path, 'before': before,
+                'written': '1', 'scope': 'namespace',
+            })
+            self.save()
+            command(['tee', global_path], ns=GW, data=b'1\n')
             for ns, iface, key, value in desired:
                 path = '/proc/sys/net/ipv4/conf/' + iface + '/' + key
                 before = command(['cat', path], ns=ns).stdout.decode().strip()
@@ -1452,12 +1839,15 @@ class Manager:
             records = self.s.get('sysctls', [])
             restorable = []
             for rec in records:
-                links = json_command(['ip', '-j', 'link', 'show'], ns=rec['namespace'])
-                same = any(x['ifname'] == rec['interface'] and x['ifindex'] == rec['ifindex'] for x in links)
-                if not same:
-                    # The original interface is gone. Never restore settings to
-                    # a replacement interface merely reusing the same name.
-                    continue
+                if rec.get('scope') == 'namespace':
+                    same = True
+                else:
+                    links = json_command(['ip', '-j', 'link', 'show'], ns=rec['namespace'])
+                    same = any(x['ifname'] == rec['interface'] and x['ifindex'] == rec['ifindex'] for x in links)
+                    if not same:
+                        # The original interface is gone. Never restore settings to
+                        # a replacement interface merely reusing the same name.
+                        continue
                 current = command(['cat', rec['path']], ns=rec['namespace'], okay=True)
                 if current.returncode or current.stdout.decode().strip() != rec['written']:
                     raise Blocked('Owned interface sysctl drift; external settings preserved.')
@@ -1547,6 +1937,14 @@ class Manager:
                 return self.event(
                     'guard', 'Blocked',
                     'Unknown shared guard preserved; independent boot emergency deny installed.')
+            # A sibling distro has its own private journal, but it shares the
+            # WSL VM network namespace with the manager. Refresh the runtime
+            # identity after every boot so the next Start is not rejected as
+            # stale solely because this distro was launched after a restart.
+            self.s['root_namespace'] = os.readlink('/proc/self/ns/net')
+            self.s['boot_id'] = boot_id()
+            self.s['phase'] = 'DistroConfigured'
+            self.save()
             return self.event(
                 'guard',
                 'Succeeded',
@@ -1554,7 +1952,15 @@ class Manager:
             )
         # Establish a first-start deny before reading private state or profile.
         # If manager state is unavailable, this static table remains in force.
-        state = ensure_static_boot_guard()
+        # A surviving opened manager table is authenticated against this
+        # generation's private journal below. Do not replace it with a static
+        # table here, because that would hide the old opened shape before the
+        # cold-boot reconciliation can prove and close it.
+        if (self.s.get('phase') == 'Running' and
+                manager_table_matches_opened_install(self.s)):
+            state = 'manager'
+        else:
+            state = ensure_static_boot_guard()
         if state == 'unknown':
             ensure_boot_emergency_deny()
             raise Blocked('Unknown shared guard preserved; boot emergency deny installed.')
@@ -1773,6 +2179,7 @@ def parse(argv=None):
     parser.add_argument('--scope-attestation', type=Path)
     parser.add_argument('--acknowledge-shared-guard', action='store_true')
     parser.add_argument('--release-guard', action='store_true')
+    parser.add_argument('--allow-unconfigured', action='store_true')
     # REMAINDER on a positional would consume --profile. Split only at explicit --.
     tokens = list(sys.argv[1:] if argv is None else argv)
     command_args = []
@@ -1782,6 +2189,8 @@ def parse(argv=None):
         tokens = tokens[:pos]
     args = parser.parse_args(tokens)
     args.command = command_args
+    if args.allow_unconfigured and args.action != 'restore-config':
+        parser.error('--allow-unconfigured is only valid for restore-config.')
     if command_args and args.action != 'run':
         parser.error('Only run accepts a command after --.')
     if args.action != 'guard' and args.generation is None:
@@ -1803,7 +2212,7 @@ def main(argv=None):
         lockfile = STATE / 'manager.lock'
         fd = os.open(lockfile, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'w') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquire_manager_lock(lock)
             manager = Manager(args)
             manager.lock = lock
             if manager.s and (manager.s.get('root_namespace') != os.readlink('/proc/self/ns/net') or manager.s.get('boot_id') != boot_id()):

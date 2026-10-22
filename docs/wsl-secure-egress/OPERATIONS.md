@@ -7,18 +7,20 @@
 2. Verify that normal Windows IPv4/IPv6 and the existing Clash/Mihomo service
    work. Configure the private mandatory-connection baseline described in the
    [project README](README.md).
-3. Prepare `COR-Egress` and stop every WSL distribution. Save all Linux work.
+3. Prepare the existing ordinary WSL distribution named in the private profile
+   and stop every WSL distribution. Save all Linux work. The project does not
+   require a specially named or imported distribution.
 4. Prepare the private profile and dedicated VPS service. Never put the
    profile, keys, SSH credentials or real endpoint into this repository.
-5. Run the page's **Doctor** and **安装预检** actions. A preview changes no files,
-   firewall objects, WSL runtime, routes or DNS.
+5. Run **预检** and **状态**. These actions change no files, firewall objects,
+   WSL runtime, routes or DNS.
 
 ## Install
 
 Choose the local private JSON profile, run the installation preflight, then
-click **执行安装**. The installed client requests Windows UAC for the current
-user. Approve that Windows prompt to run the fixed installed broker. Doctor,
-status and preflight do not elevate or start stopped distributions. A different
+click **安装**. The installed client requests Windows UAC for the current
+user. Approve that Windows prompt to run the fixed installed broker. Status and
+preflight do not elevate or start stopped distributions. A different
 administrator account is rejected because WSL registrations belong to the
 original user. Installation performs these operations in order:
 
@@ -39,6 +41,42 @@ snapshots remain the rollback source. A conflicting configuration is rejected.
 Inspect `%ProgramData%\ClashOfRust\WslEgress` and the displayed recovery advice
 before retrying a failed transaction.
 
+## Standalone component
+
+The WSL backend is also an independent tool under `clash-of-wsl/` and
+`scripts/wsl-secure-egress/`. Build or provide the guardian binary, then install
+it from the repository root:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File clash-of-wsl/Install-ClashOfWsl.ps1 -Execute
+```
+
+The installer writes under `%ProgramFiles%\Clash of Rust WSL`, registers the
+owned SYSTEM guardian and starts it. After installation, all lifecycle actions
+go through the fixed entry point:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "$env:ProgramFiles\Clash of Rust WSL\ClashOfWsl.ps1" `
+  -Action Status
+```
+
+The standalone installer copies the Windows control surface into its own fixed
+package. The Linux payload remains the same reviewed module and data plane under
+`scripts/wsl-secure-egress/`; `ClashOfWsl.ps1` forwards lifecycle actions to it.
+Installing the desktop client is not a prerequisite for the standalone
+component.
+
+`Install`, `Configure`, `Start`, `Stop`, `Status`, `Test`, `Rollback` and
+`Uninstall` share one JSON result contract. Mutating actions require
+`-Execute`. An executed `Install` or `Start` also requires the protected
+profile; endpoint and port fields alone cannot supply WireGuard keys.
+
+The current host uses an older protected package path and service installation,
+but its Windows profile is missing and its broker remains fail-closed. Do not
+treat a running guardian service as a connected tunnel.
+
 ## Connect and verify
 
 **连接** runs the Windows scope audit, sends a short-lived attestation to the
@@ -56,7 +94,7 @@ SYSTEM, starts a stopped distribution, opens an endpoint or extends the
 five-minute proof lifetime. Renewal failures close the endpoint and retain a
 failure receipt. Stop removes only the exactly matching owned task.
 
-**断开 · 留保护** closes the Windows endpoint before stopping Linux transport
+**断开并保留保护** closes the Windows endpoint before stopping Linux transport
 objects. The shared deny guard remains. Closing the GUI does not remove
 protection.
 
@@ -109,12 +147,12 @@ The suite labels real Windows/WSL, Hyper-V, cold boot and VPS geography
 
 ## Recover
 
-Default **回退 · 保留保护** closes the endpoint and leaves the guard installed.
-The destructive **恢复原网络…** action requires a separate confirmation and all
-WSL distributions to be stopped. It then restores per-distribution files,
-removes only the owned Linux table and namespaces, restores the exact
-`.wslconfig` snapshot, removes Docker containment and restores the immediate
-Hyper-V settings.
+Default **断开并保留保护** closes the endpoint and leaves the guard installed.
+The destructive **恢复原网络** action opens a separate confirmation dialog and
+requires all WSL distributions to be stopped. It then restores
+per-distribution files, removes only the owned Linux table and namespaces,
+restores the exact `.wslconfig` snapshot, removes Docker containment and
+restores the immediate Hyper-V settings.
 
 Restore refuses when an object has changed since this generation wrote it.
 Never clear the whole firewall, reset WSL, delete distributions or overwrite
@@ -123,10 +161,13 @@ manual review.
 
 ## Uninstall
 
-Uninstall is allowed only after the journal reaches `restored` and the fixed
-audit service matches its expected path. The installer does not remove Docker
-or WSL data. If the check fails, uninstall stops and retains the recovery
-tooling.
+Uninstall requires the explicit `-RestoreOriginalNetwork` switch. The
+standalone installer invokes the protected Rollback transaction first and
+continues only when it reports `succeeded`. The installer does not remove
+Docker or WSL data. If restore is blocked or fails, uninstall retains the
+service and recovery payload so the administrator can inspect the journal and
+retry safely. Use `Uninstall-Check.ps1` as the additional safety gate for an
+application-package installation.
 
 The audit service is accepted from either protected package location: the
 helper package directory `%ProgramFiles%\Clash of Rust WSL` or an application
@@ -170,9 +211,9 @@ matching owned UFW entries; private recovery files are retained.
 ## Existing WSL and local builds
 
 The manager distro name comes from the private profile; it may be an existing
-ordinary distro such as `Ubuntu-22.04`. Prepare its dependencies before the
-default-deny cutover. Do not import or delete a distro just to match the
-documentation's example name.
+ordinary distro such as `Ubuntu-22.04` or `Ubuntu-26.04`. Prepare its
+dependencies before the default-deny cutover. Do not import or delete a distro
+just to match an example name.
 
 `linux/retire-legacy.py` is a separate, explicit migration tool for the known
 XUAN WSL service names. It stops/disables those units, suppresses the old Docker

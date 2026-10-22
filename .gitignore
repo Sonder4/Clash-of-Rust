@@ -7,6 +7,9 @@
 /tools/
 /.local-tools/
 
+# Locally supplied application core used to build host packages
+/resources/mihomo.exe
+
 # Temporary downloads and local diagnostics
 *.partial
 *.tmp
@@ -40,3 +43,9 @@ __pycache__/
 
 # Local rollback snapshots for authorized network changes
 /ClashOfRust-network-backups/
+
+# Host-scoped deployment evidence (network snapshots, admin job journals)
+**/ClashOfRust-network-backups/
+
+# Host-local WSL system backups (never reviewed source)
+docs/wsl-secure-egress/backups/

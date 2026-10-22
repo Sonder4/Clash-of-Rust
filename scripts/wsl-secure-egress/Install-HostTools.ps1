@@ -29,12 +29,20 @@ foreach ($name in $top) { $files["resources\wsl-secure-egress\$name"] = Join-Pat
 foreach ($name in $linux) { $files["resources\wsl-secure-egress\linux\$name"] = Join-Path $source "linux\$name" }
 foreach ($name in $server) { $files["resources\wsl-secure-egress\server\$name"] = Join-Path $source "server\$name" }
 $hashes = [ordered]@{}
+function Get-HostToolHash([string]$Path) {
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try { return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '') }
+        finally { $hasher.Dispose() }
+    } finally { $stream.Dispose() }
+}
 foreach ($entry in $files.GetEnumerator()) {
     if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) { throw 'A required build/resource file is missing.' }
     if ((Get-Item -LiteralPath $entry.Value).Attributes -band [IO.FileAttributes]::ReparsePoint) {
         throw 'Redirected package source refused.'
     }
-    $hashes[$entry.Key] = (Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash
+    $hashes[$entry.Key] = Get-HostToolHash $entry.Value
 }
 if (-not $Execute) {
     [ordered]@{outcome='not_run';files=$hashes.Count;message='Build the guardian from the reviewed source before execution.'} |
@@ -63,7 +71,7 @@ if ($existing) {
     foreach ($name in $files.Keys) {
         $property = $receipt.PSObject.Properties[$name]
         if (-not $property -or
-            (Get-FileHash -LiteralPath (Join-Path $destination $name) -Algorithm SHA256).Hash -ne $property.Value) {
+            (Get-HostToolHash (Join-Path $destination $name)) -ne $property.Value) {
             throw 'Prepared package was modified; preserving it.'
         }
     }
@@ -90,7 +98,7 @@ if ($existing) {
             $target = Join-Path $BackupDirectory $name
             New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($target)) -Force | Out-Null
             Copy-Item -LiteralPath (Join-Path $destination $name) -Destination $target
-            if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $receipt.PSObject.Properties[$name].Value) {
+            if ((Get-HostToolHash $target) -ne $receipt.PSObject.Properties[$name].Value) {
                 throw 'Code backup digest mismatch; no helper files changed.'
             }
         }
@@ -122,13 +130,13 @@ foreach ($item in @(@('S-1-5-18','FullControl'),@('S-1-5-32-544','FullControl'),
 $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
 Set-Acl -LiteralPath $destination -AclObject $acl
 foreach ($entry in $files.GetEnumerator()) {
-    if ((Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash -ne $hashes[$entry.Key]) {
+    if ((Get-HostToolHash $entry.Value) -ne $hashes[$entry.Key]) {
         throw 'Source changed during installation; partial helper package retained.'
     }
     $target = Join-Path $destination $entry.Key
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($target)) -Force | Out-Null
     Copy-Item -LiteralPath $entry.Value -Destination $target -Force
-    if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $hashes[$entry.Key]) { throw 'Installed resource digest mismatch.' }
+    if ((Get-HostToolHash $target) -ne $hashes[$entry.Key]) { throw 'Installed resource digest mismatch.' }
 }
 [IO.File]::WriteAllText((Join-Path $destination 'installed-files.json'),
     ($hashes | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))

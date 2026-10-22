@@ -3,10 +3,143 @@
 This file records executed results and their limits. Update it only from an
 actual run; never convert an unavailable or timed-out check into PASS.
 
-The latest PR repair results are in the final section. Earlier dated runs are
-historical evidence for their own revision. The installed Clash of Rust 0.6.0
-is still running, this source revision has not replaced it, and the production
-WSL journal is `installed_closed` with its endpoint disabled.
+Earlier dated runs are historical evidence for their own revision and payload.
+They do not describe the current host state.
+
+## Current snapshot, 2026-10-22
+
+| Item | Current read-only evidence |
+| --- | --- |
+| Upstream | `2615ebc96f9f510802194727a6108bde73f4c8ed` |
+| Last CI-verified head | `efa400d5aef47240d48b7022f89d9bf31a70c2dd` |
+| Branch relation | `0` behind, `79` ahead of `upstream/main` |
+| Current worktree | UI and dependency-snapshot verification changes pending commit and hosted CI |
+| Installed desktop | Clash of Rust 0.6.0 under `C:\Program Files\Clash of Rust` |
+| Source version | Upstream 0.6.1 synchronized; not installed over the 0.6.0 desktop |
+| `.wslconfig` | NAT, `localhostForwarding=false`, `dnsTunneling=false`, `autoProxy=false`, `firewall=true` |
+| Hyper-V WSL policy | Default inbound and outbound Block |
+| Endpoint exception | `ClashOfRust-WslEgress-Endpoint`, `Enabled=False` |
+| Windows profile | **MISSING**; a root-only Linux copy exists in Ubuntu-22.04 |
+| Broker state | `failed_closed_requested` |
+| Guardian service | Running / Automatic; this is not tunnel evidence |
+| Ubuntu 22.04 | Running; plain NAT `eth0`; DNS and `curl` fail |
+| Ubuntu 26.04 | Installed under `F:\WSL`, WSL2, currently stopped |
+| Chrome / Codex CLI / Claude Code CLI / Claude Desktop | `NOT_RUN` on the current host |
+| Current VPS source and provider connections | `NOT_RUN` |
+| Strict-launcher visibility and interop checks | Plain-shell evidence only; strict live check `NOT_RUN` |
+| UAC transaction | `NOT_RUN` for the current repair |
+| Stop/Start, cold boot, reboot, network switch | `NOT_RUN` |
+
+The current fail-closed state takes precedence over the historical
+2026-10-18 tunnel results below.
+
+### 2026-10-22 final development-tree verification
+
+The following checks ran on the development tree after `efa400d`. These do not
+replace a hosted CI result for the eventual final commit.
+
+| Check | Actual result |
+| --- | --- |
+| `verify-build.py` against the downloaded `efa400d` Windows x64 artifact and matching dependency snapshot | PASS: `outcome=verified`, `0.6.1`, Windows x64, Release, 36 files |
+| `scripts/wsl-secure-egress/tests/verify-build-unit.py` | PASS, 4 tests |
+| `scripts/test-workflow-artifacts.py` | PASS, 6 tests after UTF-8 rerun; an initial Windows-console encoding run failed on `×` |
+| `scripts/test-build-tools.py` | PASS, 76 tests, 1 skipped after UTF-8 rerun; a first Windows path test failed |
+| Linux static and boot-guard suite | PASS, 87 tests |
+| VPS server validation | PASS, 24 tests |
+| VPS provisioning | PASS, 27 tests |
+| Windows offline broker suite | PASS, 166 assertions |
+| Windows offline workflow suite | PASS, 244 assertions |
+| Elevation unit suite | PASS, 21 assertions; UAC `NOT_RUN` |
+| Administrator argument-vector suite | PASS, 44 assertions; consent `NOT_RUN` |
+| Profile restore, Windows PowerShell 5.1 | PASS, 18 assertions |
+| Package staging | PASS, 75 assertions |
+| Package upgrade | PASS, 53 assertions |
+| Clash of WSL component | PASS, 34 assertions; live checks `NOT_RUN` |
+| `cargo test -p clash-of-rust --bin clash-of-rust --locked -- --test-threads=1` | PASS, 107/107 |
+| `cargo check -p clash-client-ui --locked` | PASS |
+| `cargo check -p clash-of-rust --bin clash-of-rust --locked` | PASS |
+| WSL runtime, VPS, model-vendor and Claude acceptance | `NOT_RUN` |
+| UAC transaction | `NOT_RUN` for the current development tree |
+
+The new verifier requires the separately downloaded CI dependency snapshot,
+checks its commit, baseline, constraints and file hashes, and checks the
+artifact's frozen `build_inputs` against it. It does not alter the worktree or
+substitute the checked-in lockfile for the resolved CI lockfile.
+
+### 2026-10-22 security review fixes (P0/P1), offline only
+
+This round changed repository code and documents. No elevated action, WSL
+runtime change, firewall change or live network probe was performed.
+
+| Check | Actual result |
+| --- | --- |
+| Persistent UAC worker (project-owned) | Removed: `scripts/wsl-secure-egress/uac/` and `docs/wsl-secure-egress/UAC_WORKER.md` deleted |
+| `tests/admin-job-acl.ps1` | PASS, 77 checks; consent `NOT_RUN`; elevation vector `PASS` |
+| `tests/restore-profile-unit.ps1` | PASS, 23 assertions |
+| `tests/prepare-package-stage-unit.ps1` | PASS, 75 assertions |
+| `tests/windows-unit.ps1` | PASS, 166 assertions |
+| `tests/elevation-unit.ps1` | PASS, 21 assertions |
+| `tests/package-upgrade-unit.ps1` | PASS, 53 assertions |
+| `tests/windows-workflow.ps1` | PASS, 251 assertions |
+| `tests/linux_static_test.py` | PASS, 87 tests, 2 skipped |
+| `tests/tool-installer-static-unit.py` | PASS, 9 tests |
+| `tests/provision_unit.py` | PASS, 27 tests |
+| `tests/payload_unit.py` | PASS (16 skipped) |
+| `tests/server_unit.py` | PASS |
+| Hosted CI for this round | `NOT_RUN` at the time this section was written |
+| UAC / admin transaction / live egress / fault tests | `NOT_RUN` |
+
+Changes that produced these results:
+
+- The administrator job no longer embeds the VPS IPv4, the profile digest or
+  `F:\Codex` staging paths. `-ExpectedEgressIpv4` and `-ExpectedProfileSha256`
+  are mandatory caller inputs; the profile restore call forwards both.
+- The elevated job resolves Windows tools from absolute `System32` paths,
+  validates the Python interpreter and a clean worktree in the invoking
+  medium-integrity session, and executes only hash-verified copies of the
+  reviewed scripts from an administrator-only directory.
+- The recursive ACL rewrite of the whole worktree was removed. Staging and
+  manifest directories are protected with a pre-change grant snapshot, and a
+  keep-access repair refuses to drop an existing identity. Package-stage
+  protection now runs after the rebuild and before the manifest digest.
+- `Get-FileHash` was replaced by the existing .NET SHA256 helper inside the
+  elevated path, and the root-shell `wsl.exe ... /bin/sh -c` call was replaced
+  by a fixed argv invocation.
+- `tools/install-wsl-tools.sh` no longer defaults `EXPECTED_EGRESS_IPV4`; a
+  missing or malformed value exits 21 before any network request.
+- The real VPS IPv4 was removed from tracked documents (the fork is public).
+  It remains in this repository's Git history; history rewriting was not run.
+- Eight host-system backup files under
+  `docs/wsl-secure-egress/backups/live-20261019/` were removed from version
+  control and the directory is now ignored.
+
+### Earlier 2026-10-22 build-verification and snapshot-gate validation
+
+The following commands ran after the earlier staging work and before a new
+hosted CI result was available for the pending test-contract commit:
+
+| Check | Actual result |
+| --- | --- |
+| `tests/prepare-package-stage-unit.ps1` | PASS, 75 assertions |
+| `tests/admin-job-acl.ps1` | PASS, 44 assertions; consent `NOT_RUN` |
+| `tests/windows-unit.ps1` | PASS, 166 assertions |
+| `tests/windows-workflow.ps1` | PASS, 244 assertions |
+| `tests/provision_unit.py` | PASS, 27 tests |
+| `ClashOfWsl/Test-ClashOfWsl.ps1` | PASS, 34 assertions; live checks `NOT_RUN` |
+| `verify-build.py` against downloaded `8f15821` artifact | FAIL as expected: source commit differs from `37dfafd` |
+| `python scripts/build_inputs.py resolve` | FAIL before writing `inputs.json`: local host has no `go` executable |
+| GitHub CI at `8f15821` | PASS, all 13 checks completed successfully |
+| UAC and live network transaction | `NOT_RUN` |
+
+The staging unit now requires a release manifest bound to the current source
+commit and never falls back to an unverified `target\debug` binary. The
+administrator snapshot records Hyper-V settings and the owned Endpoint rule
+from both `PersistentStore` and `ActiveStore`, rejects redirected snapshot
+paths, and confirms all WSL distributions remain stopped after collection.
+
+The failed dependency-resolution command ran `cargo update` before stopping
+at the missing Go executable. `Cargo.lock` was restored to the committed
+version before any test or commit. No dependency lockfile change is claimed.
 
 ## Local offline checks
 
@@ -119,6 +252,61 @@ The live acceptance report is
 An earlier run at 02:13:02 is retained as FAIL: the ordinary path passed, but
 the isolated launcher correctly refused a stale Windows attestation and the
 aggregate result was failed. It was not silently replaced.
+
+## 2026-10-18 PR repair and current host retest (18:30 Asia/Taipei)
+
+This section supersedes the older connected-state description above for the
+current host state. The historical 02:15 live acceptance remains evidence only
+for that earlier transaction and is not evidence that the tunnel is currently
+connected.
+
+- Windows `.wslconfig` was read as `networkingMode=nat`,
+  `dnsTunneling=false`, `autoProxy=false`, `firewall=true`, and
+  `localhostForwarding=false`.
+- The current protected Windows journal was read through the administrator
+  broker with secrets omitted. It began this retest at `installed_closed`, with
+  endpoint disabled. The read-only Status action reported host policy PASS and
+  WSL runtime FAIL.
+- Initial WSL readback found ordinary NAT `eth0`, no `cor-eb0`, no named
+  network namespaces and no WireGuard handshake. Manager Status first rejected
+  a missing generation argument; with the journaled generation it reported
+  `Guarded`. Claude's retry service was stopped after a root-only backup of its
+  unit to `/var/backups/clash-wsl-repair-20261018/`.
+- A Windows administrator hot update installed the reviewed helper and Linux
+  payload after backing up the previous helper under
+  `ClashOfRust-network-backups/review-repair-20261018/`. The live payload update
+  returned `succeeded`, `phase=installed_closed`,
+  `owned_config_matches=true`, `interop_runtime_disabled=true`, and
+  `endpoint_enabled=false`. The WSL NAT network mode was not changed.
+- A subsequent real `Start -Execute` passed the all-distro, Hyper-V, DNS,
+  interop and Docker coverage scope audits. Linux start and endpoint enable
+  proceeded, but registering the required fixed interactive scope-renewal task
+  failed with a Windows `CimException`. The transaction's compensation closed
+  the endpoint and returned `failed_closed_requested`; the operation is a
+  **FAIL**, not a connected acceptance. No Claude or model-vendor request was
+  made. Task Scheduler failure diagnosis remains unresolved.
+- Windows baseline checks to `ipgw.neu.edu.cn` and `api.okinto.com` returned
+  HTTP 200 with certificate validation at 18:18:24 and 18:18:25 +08:00.
+  These are Windows-only checks; WSL has no NEU/domestic routing exception.
+- Windows offline suites passed: `windows-unit` 149 assertions,
+  `windows-workflow` 161, `elevation-unit` 21, and `package-upgrade-unit` 53.
+  Their raw output is in the ignored repair backup directory.
+- Real WSL offline suites passed: Linux static 66 (64 pass, two platform
+  skips), payload 32, server 24, provision 26, and acceptance harness 3; total
+  151 passed, no failures. A disposable in-kernel namespace test passed all
+  89 cases with no skips. These fixtures do not prove production Hyper-V,
+  actual VPS egress, or vendor reachability.
+- Claude Desktop remains blocked from testing. Its saved user unit and launched
+  process had a dead `127.0.0.1:12345` proxy, explaining the screenshot's
+  `ERR_PROXY_CONNECTION_FAILED`. A root-only backup exists and its service is
+  stopped. Separately, the installed native binding requests GLIBC 2.39
+  symbols `pidfd_spawnp` and `pidfd_getpid`, while Ubuntu 22.04 provides glibc
+  2.35. Do not replace system glibc. The package/runtime compatibility issue
+  is independent of the proxy outage.
+- No WSL public IP, private endpoint, SSH key, WireGuard key, or model-vendor
+  connection was placed in the repository. The detailed local audit and raw
+  machine reports are under the ignored
+  `ClashOfRust-network-backups/review-repair-20261018/` directory.
 
 ### Hosts isolation upgrade, fail-closed and recovery
 
@@ -392,6 +580,69 @@ fault injection is not authorized.
 Update this document after GitHub Actions and any approved VPS/WSL acceptance
 with the exact commit, run URL and per-scenario result.
 
+## 2026-10-18 current installed-payload retest
+
+> Historical section. The successful rows below describe the payload and host
+> state on 2026-10-18. They do not override the current missing profile,
+> disabled endpoint or blocked WSL DNS.
+
+This section records the resumed local retest after the protected helper
+payloads were synchronized to both Program Files package locations. It
+supersedes earlier entries that described the endpoint as disabled before the
+UAC-approved recovery.
+
+| Check | Result | Actual evidence |
+| --- | --- | --- |
+| Upstream synchronization at that time | PASS | `upstream/main=37683750b37be9d2bbcfb22804bec96174e14af5`; that historical fork HEAD was 39 commits ahead and 0 behind |
+| Stop transaction | PASS | Linux manager returned `succeeded`, phase `Guarded`; owned namespaces and policy routes were removed |
+| First Start after Stop | PASS | Linux manager returned `succeeded`, phase `Running`; both `cor-egress-transport` and `cor-egress-gw` were recreated |
+| Isolated IPv4 exit | PASS | `api.ipify.org` and `ifconfig.me/ip` both returned the VPS IPv4 recorded in the protected profile |
+| Isolated network view | PASS | only `lo`, `cor-bg0`, `wg0`; default IPv4 route is `wg0`; DNS is `10.77.0.1`; IPv6 default is unreachable |
+| OpenAI endpoint | PASS | HTTPS/TLS reached `api.openai.com`; HTTP 401 for missing bearer authentication |
+| Anthropic endpoint | PASS | HTTPS/TLS reached `api.anthropic.com`; HTTP 405 for a GET request |
+| DeepSeek endpoint | PASS | HTTPS/TLS reached `api.deepseek.com`; HTTP 401 for missing authentication |
+| Claude Code CLI | PASS | `claude --version` returned `2.1.302` inside the isolated launcher; no proxy environment variables were present |
+| Fail-closed boundary | PASS | Stop withdrew the endpoint exception before namespace teardown; a subsequent Start was required to restore the tunnel |
+| Windows baseline after retest | NOT_RUN in this exact command batch | The mandatory Windows URLs were validated by the earlier UAC-approved synchronization/recovery record; repeat before any future host-policy mutation |
+
+The three provider results prove network reachability and TLS termination only;
+they do not prove authenticated API use. The German address is intentionally
+documented because it is the observed exit evidence, while private WireGuard
+keys, SSH material and full profile contents remain outside Git. Claude Desktop
+is not marked passed: its old `127.0.0.1:12345` proxy failure and the
+Ubuntu-22.04 GLIBC 2.39 native-binding requirement are separate from the
+working Claude Code CLI path.
+
+## 2026-10-18 final payload synchronization and fail-closed retest
+
+The reviewed source payload was synchronized through the administrator UAC
+path to both protected Program Files package trees, then installed into the
+journaled Ubuntu-22.04 WSL distribution with the endpoint closed. The update
+receipt reported `owned_config_matches=true`, `interop_runtime_disabled=true`,
+`endpoint_enabled=false`, and `network_changed=false`. The installed
+`manager.py` SHA256 matched the repository file
+(`9ce7fa6dd25cf7ffef88950202061ea20fe7790f9d87dd1ce6f9995e270df8b2`).
+
+The Stop→Start regression was exercised through the real broker:
+
+- UAC `Stop -Execute`: `succeeded`, phase `installed_closed`.
+- A protected workload launched after Stop: `blocked` with
+  `Namespace ownership mismatch; foreign namespace preserved.` No local
+  Windows fallback was available.
+- UAC `Start -Execute`: `succeeded`, phase `connected_unverified`; all five
+  scope checks were `PASS`.
+- Final isolated IPv4: the VPS IPv4 recorded in the protected profile; Claude Code CLI: `2.1.302`.
+- Windows baseline after recovery: `ipgw.neu.edu.cn` HTTP 302 and
+  `api.okinto.com` HTTP 200.
+
+The first-Start failure was traced to a boot guard and explicit Start racing
+for `manager.lock`. The manager now waits up to 15 seconds with a 50 ms poll,
+then fails closed on timeout. The Linux static suite passed 75 tests in the
+Windows-host invocation (two Linux-only skips) and 75/75 inside Ubuntu-22.04;
+the Windows suites passed 161 and 167 assertions, package-upgrade 53,
+provisioning 26, and Rust WSL 27 tests. These results are the current local
+evidence for the repaired fork head; new-head GitHub Actions remains required.
+
 ## 2026-10-18 PR repair verification
 
 The following checks were executed after repairing the outstanding Fork PR
@@ -457,3 +708,290 @@ runtime remain `NOT_RUN`, `BLOCKED` or `FAIL` as recorded above.
 
 These are local worktree results. A new-head GitHub CI result is still pending;
 old-head CI evidence above must not be used to declare this repair's CI passed.
+
+## 2026-10-22 final offline verification before fork push
+
+The following suites were executed again from the review branch after the
+last documentation and CI changes. No UAC prompt was raised, no WSL distro was
+started by these tests, and no Windows firewall, route, DNS or service setting
+was changed by these tests.
+
+| Check | Result |
+| --- | --- |
+| Windows broker unit | PASS, 166 assertions |
+| Windows workflow | PASS, 244 assertions |
+| Windows elevation | PASS, 21 assertions; consent `NOT_RUN` |
+| Administrator argument vector and ACL | PASS, 25 assertions; consent `NOT_RUN` |
+| Profile restore | PASS, 18 assertions |
+| Package staging | PASS, 75 assertions |
+| Package upgrade | PASS, 53 assertions |
+| Clash of WSL | PASS, 34 assertions; live tests `NOT_RUN` |
+| Linux static and boot guard | PASS, 87 tests, 2 skipped |
+| Acceptance harness | PASS, 3 tests |
+| VPS server | PASS, 24 tests |
+| VPS provisioning | PASS, 27 tests |
+| Tool installer static regression | PASS, 8 tests |
+| Rust desktop binary, serial | PASS, 106/106 |
+| Rust formatting and compile check | PASS |
+| WSL workflow YAML parse | PASS |
+| Git whitespace check | PASS |
+
+The hosted CI run for this new commit was still pending when this entry was
+written. Every live deployment, tunnel, provider, Claude, interop, cold-boot,
+network-switch, rollback, uninstall and reinstall item remains `NOT_RUN` until
+authoritative evidence is collected.
+
+The first hosted run on `8f97926` failed in `restore-profile-unit.ps1` because
+the regression depended on the local machine having a real root-owned WSL
+profile. That dependency was replaced with a native, process-local synthetic
+profile fixture. The preview path still executes the production script's
+ProcessStartInfo read, SHA256 validation and schema validation; it transfers
+the fixture on stdout and never writes the Windows target. The corrected test
+passes 18 assertions under Windows PowerShell 5.1, including with no real
+profile available. The hosted run remains pending until the repaired commit is
+pushed.
+
+## 2026-10-18 follow-up repair and recovery attempt (current session)
+
+This entry records only commands actually executed in the resumed session.
+
+| Check or operation | Result | Evidence and limits |
+| --- | --- | --- |
+| WSL PR repair coverage | PASS, 72 tests, 2 platform skips | `python scripts/wsl-secure-egress/tests/linux_static_test.py`; sibling runtime and uplink classifier fixtures |
+| VPS provisioning unit tests | PASS, 26 tests | Offline mocked host boundaries |
+| VPS server unit tests | PASS, 24 tests | Offline profile validation |
+| Rust WSL request tests | PASS, 27 tests | `cargo test -p clash-client-core wsl::tests --locked --offline`; endpoint-only Install/Start requires a profile |
+| Windows broker unit tests | PASS, 149 assertions | Offline mocks; no host policy writes |
+| Windows workflow tests | PASS, 161 assertions | `wsl_started=false`, `firewall_modified=false`, `scheduled_tasks_modified=false` |
+| Package upgrade tests | PASS, 53 assertions | Offline; no service or network changes |
+| Git whitespace check | PASS | `git diff --check` |
+| Admin Start / scope renewal | BLOCKED | UAC-launched PowerShell produced no result; prior elevation reported user cancellation |
+| Current broker Status | FAIL-CLOSED | `phase=failed_closed_requested`, host policy PASS, Linux runtime PASS, scope attestation NOT_RUN, protection unknown |
+| Hyper-V endpoint rule | Disabled | Persistent rule targets the journaled VPS UDP endpoint and port; `Enabled=False` |
+| Linux manager Status | Local-only success, end-to-end UNVERIFIED | `phase=Running`, `protection=Unverified`; local guard/interface check explicitly makes no end-to-end claim |
+| Claude stale proxy cleanup | Applied with backup | User unit backed up under `/var/backups/clash-wsl-repair-20261018/`, autostart disabled, old proxy environment and Electron arguments removed |
+| Claude / model-vendor network tests | NOT_RUN | Endpoint exception disabled and no current end-to-end VPS proof exists |
+| Legacy Claude proxy retirement | Preview only | Known old units inactive/disabled; original files retained; no `--execute` retirement |
+
+The installed Linux namespaces and a recent WireGuard handshake were observed,
+but that does not override the disabled Windows endpoint rule or manager
+`Unverified` status. Do not start Claude or issue model-vendor requests until an
+authorized administrator Start completes scope renewal and full egress
+acceptance confirms the VPS source address, tunnel DNS, and IPv6 policy.
+
+The Claude user service remains disabled as a fail-safe; its original unit
+backup is preserved in the root-only WSL backup directory above.
+
+## 2026-10-22 current fork review repair
+
+> Historical subsection for the development tree immediately after the
+> `87ef6b2` repair series. Later entries supersede its test counts and
+> current-state conclusions.
+
+This section records only commands executed on 2026-10-22. It does not change
+the production host state described above.
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| Clash of WSL component tests | PASS, 22 assertions | `clash-of-wsl/Test-ClashOfWsl.ps1`; structure, parser and installer static checks only |
+| Windows broker unit suite | PASS, 166 assertions | `tests/windows-unit.ps1`; host/WSL/network boundaries mocked |
+| Windows workflow suite | PASS, 244 assertions | `tests/windows-workflow.ps1`; no WSL start, firewall or task mutation |
+| Windows elevation suite | PASS, 21 assertions | `tests/elevation-unit.ps1`; UAC is NOT_RUN |
+| Package-upgrade suite | PASS, 53 assertions | `tests/package-upgrade-unit.ps1`; installed services unchanged |
+| Linux static/boot-guard suite | PASS, 87 tests, 2 skipped | Windows-host invocation; native permission and arch cases skipped |
+| VPS server validation | PASS, 24 tests | Offline profile validation |
+| Payload upgrade suite | PASS, 32 tests, 16 skipped | Portable cases passed; native root/flock cases skipped outside Linux root |
+| Acceptance harness | PASS, 3 tests | Offline endpoint validation |
+| VPS provisioning suite | PASS, 27 tests | Offline mocked host boundaries |
+| PowerShell parser sweep | PASS | Module, admin job, installer self-test and repaired upgrade script |
+| Linux syntax sweep | PASS | Ubuntu-22.04 `py_compile` and `bash -n`; no package or network change |
+| Rust UI test binary | PASS, 101 tests | `cargo test -p clash-of-rust --bin clash-of-rust --locked` |
+| Rust formatting | PASS | `cargo fmt --all -- --check` |
+| Rust compile check | PASS | `cargo check -p clash-of-rust --bin clash-of-rust --locked`, 122 crates |
+| Git whitespace check | PASS | `git diff --check` |
+
+The review repair includes the following behavior changes:
+
+- `ClashOfWsl` now builds a Windows command line with quote-aware arguments
+  before requesting UAC, so source paths under `Program Files` remain one
+  argument.
+- The installer registers and starts the owned SYSTEM guardian only after
+  copying the payload. A generic uninstall is refused; the explicit
+  `-RestoreOriginalNetwork` path must succeed before the service or recovery
+  payload is removed.
+- `Update-LiveWslPayload` uses a caller-owned durable stage file, so a failure
+  inside module scope cannot be mislabeled as `preflight`.
+- A missing journal-owned legacy override now refuses rollback. Missing files
+  are tolerated only while the second phase of an interrupted rollback is
+  finishing.
+- A `prepared_for_reinstall` journal enters partial recovery instead of the
+  adoption path.
+- The Slint page restores the explicit “恢复原网络” confirmation action while
+  retaining the safer “断开并保留保护” action.
+
+A first repository-wide syntax sweep incorrectly invoked Windows Python and
+native Bash with Windows paths. It reported path/tool failures and is retained
+here as a failed attempt; the corrected Ubuntu-22.04 invocation passed. This
+host tooling mistake did not indicate a source syntax failure.
+
+Live WSL state remains fail-closed at the end of this run:
+
+- Broker phase: `failed_closed_requested`
+- Hyper-V endpoint rule: disabled
+- Runtime acceptance: `NOT_RUN`
+- Scope renewal: `not_run`
+
+No administrator tunnel start, VPS egress check, OpenAI/Anthropic/DeepSeek
+request, Claude Code test, Claude Desktop test, cold boot, reboot, network
+switch, or restore/reinstall live acceptance was executed in this section.
+Those items remain `NOT_RUN` or `BLOCKED` until authoritative live evidence is
+captured.
+
+## 2026-10-22 upstream merge and ACL repair
+
+The following checks were executed after merging
+`upstream/main=2615ebc96f9f510802194727a6108bde73f4c8ed`, which contains
+the upstream 0.6.1 UI-motion and Claude protection-mode changes.
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| Upstream ancestry | PASS | `git merge-base --is-ancestor upstream/main HEAD`; that intermediate snapshot was `0 behind / 72 ahead`. The later CI-verified `87ef6b2` snapshot is `0 / 73` |
+| Admin ACL SID regression | PASS, 9 assertions | `tests/admin-job-acl.ps1`; canonical `*SID` rules pass and the host is unchanged |
+| Desktop test binary after merge | PASS, 105 tests | `cargo test -p clash-of-rust --bin clash-of-rust --locked`; includes upstream motion and WSL UI dispatch tests |
+| Workspace all-targets check | PASS | `cargo check --workspace --all-targets --locked` |
+| Rust formatting | PASS | `cargo fmt --all -- --check` |
+| Clash of WSL component suite | PASS, 22 assertions | Static/parser/installer checks; live UAC remains `NOT_RUN` |
+| Windows broker unit suite | PASS, 166 assertions | Host, WSL and network boundaries mocked |
+| Windows workflow suite | PASS, 244 assertions | No WSL, firewall or task mutation |
+| Windows elevation suite | PASS, 21 assertions | UAC is `NOT_RUN` |
+| Package-upgrade suite | PASS, 53 assertions | Installed services unchanged |
+| Linux static/boot-guard suite | PASS, 87 tests | Real Ubuntu-22.04 invocation; no live host change |
+| VPS server validation | PASS, 24 tests | Offline profile validation |
+| Payload upgrade suite | PASS, 32 tests, 16 skipped | Ubuntu-22.04 invocation; root/native cases were skipped |
+| Acceptance harness | PASS, 3 tests | Offline endpoint validation |
+| VPS provisioning suite | PASS, 27 tests | Offline mocked host boundaries |
+
+An intermediate commit created during merge preparation did not contain the
+upstream commit as a parent. It was discarded before the final merge. The
+final merge commit was then checked with `git merge-base --is-ancestor`; the
+earlier compile and test checks are not used as proof of upstream ancestry.
+
+The WireGuard client profile is still absent from its Windows target path.
+A root-only copy is present at
+`Ubuntu-22.04:/etc/cor-egress/profile.json` and matches the Linux manager
+journal. It has not yet been copied to Windows because that write requires
+protected ACL setup and UAC. No tunnel, provider request or model-client live
+test occurred in this section.
+
+## 2026-10-22 final documentation and review-test pass
+
+This section supersedes old-head and intermediate worktree counts. It records
+the development tree during documentation synchronization; it is still not a
+new-head GitHub CI result.
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| Windows unit | PASS, 166 assertions | Mocked host, WSL and network boundaries |
+| Windows workflow | PASS, 244 assertions | No firewall, WSL or task mutation |
+| Windows elevation | PASS, 21 assertions | UAC remains `NOT_RUN` |
+| Admin job construction | PASS, 25 assertions | ACL construction and an isolated execution of the native sudo argument vector; UAC remains `NOT_RUN` |
+| Profile restore | PASS, 18 assertions | Read-only or temporary fixture; does not restore the live profile |
+| Package staging | PASS, 70 assertions | Temporary fixture; preview did not write production package files |
+| Package upgrade | PASS, 53 assertions | Installed package and services unchanged |
+| Clash of WSL component | PASS, 34 assertions | Static/parser checks plus isolated execute-path tests for uninstall retention and guardian registration; live host checks remain `NOT_RUN` |
+| Linux static and boot guard | PASS, 87 tests, 2 skipped | Portable fixtures; no real host mutation |
+| VPS server validation | PASS, 24 tests | Offline schema and profile validation |
+| VPS provisioning | PASS, 27 tests | Mocked SSH and host boundaries |
+| Acceptance harness | PASS, 3 tests | Offline endpoint validation |
+| Tool installer static regression | PASS, 8 tests | Single authoritative installer, absolute compatibility wrapper and fail-closed exit-code forwarding |
+| Rust desktop binary, serial | PASS, 106/106 | Shared renderer tests were serialized |
+| Rust formatting | PASS | `cargo fmt --all -- --check` |
+| Git whitespace | PASS | `git diff --check` before final documentation edits |
+
+An earlier parallel desktop run passed 105/106 tests. The motion test
+`motion_overlays_reverse_on_reopen_release_content_and_leave_no_idle_clock`
+lost a shared headless renderer race. The test passed alone and the complete
+serial run passed 106/106. This failure remains part of the record.
+
+The current review repairs include:
+
+- profile-required validation for executed Install and Start;
+- partial Windows recovery without an absent Linux helper;
+- reinstalling after a verified restore;
+- shared boot guards for every managed distribution;
+- tolerance for an inactive systemd unit before its first start;
+- `prepared_for_reinstall` propagation through the broker, Rust report and UI;
+- explicit **恢复原网络** confirmation;
+- retained payload and service when uninstall restore fails;
+- guardian service registration and startup by the Execute path;
+- durable payload-upgrade failure stages;
+- refusal to roll back a missing journal-owned override;
+- native sudo arguments that preserve spaces in installation paths.
+
+The review-test gaps identified earlier are now covered by offline execution:
+the native sudo vector preserves paths containing spaces; installer uninstall
+retains the payload and service after a failed restore; the execute path
+registers and starts the guardian; and the compatibility installer delegates to
+the single authoritative implementation while preserving the exit-20
+fail-closed gate. These tests do not perform UAC or mutate the live host.
+
+The current host state is unchanged by these offline checks:
+
+| Live item | Result |
+| --- | --- |
+| Windows profile | `MISSING` |
+| Hyper-V endpoint | `Enabled=False` |
+| Broker | `failed_closed_requested` |
+| Guardian service | Running / Automatic |
+| Ubuntu DNS and HTTPS | Blocked; fail-closed |
+| VPS IPv4, provider reachability and Claude | `NOT_RUN` |
+| UAC, stop/start, cold boot, network switch, rollback and reinstall | `NOT_RUN` |
+
+## 2026-10-22 protected staging transaction and administrator diagnosis
+
+The following checks were executed after adding the administrator-side package
+stage rebuild. No UAC prompt was opened and no repository, network or service
+ACL was changed by these tests.
+
+| Check | Result |
+| --- | --- |
+| PowerShell parser, administrator job and ACL test | PASS |
+| Administrator ACL/argv regression | PASS, 44 assertions; consent `NOT_RUN` |
+| Windows broker unit | PASS, 166 assertions |
+| Windows workflow | PASS, 244 assertions |
+| Package staging | PASS, 70 assertions |
+| Package upgrade | PASS, 53 assertions |
+| Temporary real `icacls` canonical-SID probe | PASS, exit code 0 |
+
+The real ACL probe ran against a new temporary directory and verified SYSTEM,
+Administrators and the current user. It proves that the canonical `*SID`
+arguments are accepted by this host; it did not run the administrator job or
+modify a protected project path.
+
+The latest administrator attempt obtained a High-integrity administrator
+token, then failed in Stage 1. The authoritative progress and failure files are
+`F:\Codex\admin-job\PROGRESS.txt` and `FAILED.txt`. A read-only SHA256
+comparison showed that `F:\Codex\admin-job\COR-Full-AdminJob.ps1` did not match
+the reviewed repository copy. The deployment must therefore be rerun directly
+from the reviewed worktree after this repair is committed; UAC alone does not
+prove deployment success.
+
+The administrator-side stage now rebuilds the protected package stage after
+repairing its ACL and before creating the manifest. This remains offline-only
+coverage until the full elevated transaction runs. Current live state remains:
+
+| Live item | Result |
+| --- | --- |
+| Windows WireGuard profile | `MISSING` |
+| Hyper-V endpoint | `Enabled=False` |
+| Broker | `failed_closed_requested` |
+| Ubuntu DNS and HTTPS | Blocked; fail-closed |
+| Full administrator transaction | `NOT_RUN` |
+| VPS source address and provider requests | `NOT_RUN` |
+| Chrome, Codex CLI, Claude Code CLI and Claude Desktop | `NOT_RUN` |
+
+The WSL page was compacted in this change: transport, exit and protection stay
+visible, while endpoint/profile inputs, logs and recovery actions are under
+**高级**. The native pointer regression was rerun after this layout change;
+its result is recorded in the commit validation rather than inferred from an
+earlier build.

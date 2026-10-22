@@ -1,0 +1,19 @@
+[Unit]
+Description=Clash of WSL resident egress guard
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/clash-of-wsl/clash-of-wsl-daemon.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/cor-egress
+ProtectKernelTunables=no
+ProtectKernelModules=no
+
+[Install]
+WantedBy=multi-user.target

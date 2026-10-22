@@ -10,6 +10,27 @@ IPv4-only Internet access. WSL has no NEU, domestic-site, campus, LAN, or
 Windows-host direct exceptions: every permitted Internet flow uses the fixed
 VPS path, and IPv6 is denied rather than routed locally.
 
+## Current host state and evidence
+
+This section records operational status separately from the design guarantees:
+
+| Item | Current evidence |
+| --- | --- |
+| Windows profile | Missing from the protected Windows target |
+| Hyper-V endpoint | Matching UDP rule is present with `Enabled=False` |
+| Broker | `failed_closed_requested` |
+| Guardian service | `Running / Automatic`; not evidence of a tunnel |
+| Ubuntu 22.04 | Running with a NAT-only link; DNS and HTTPS unavailable |
+| Ubuntu 26.04 | Installed under `F:\WSL`; stopped |
+| VPS IPv4, tunnel DNS, IPv6 egress | `NOT_RUN` for the current generation |
+| OpenAI, Anthropic, DeepSeek | `NOT_RUN` for the current generation |
+| Chrome, Codex CLI, Claude Code CLI, Claude Desktop | `NOT_RUN` or not installed |
+| VPN loss, cold boot, reboot, network switch | `NOT_RUN` |
+
+The 2026-10-18 VPS source, DNS and vendor observations are historical evidence
+for those exact operations. The current missing profile and disabled endpoint
+take precedence over that history.
+
 ## Enforcement layers
 
 1. **Persistent Windows boundary.** Hyper-V Firewall is configured for the
@@ -91,23 +112,44 @@ unknown outcome that requires inspection, not an automatic rollback or retry.
 
 ## Tailscale and WireGuard
 
-Tailscale is preferred by the product requirement, but a heartbeat, GUI
-ordering or asynchronous exit-node callback cannot prove that the outer
-boundary exists before Linux networking starts. Windows therefore refuses
-Tailscale install and start. Linux accepts a Tailscale profile only as a closed
-deny guard: `start` refuses that backend, so no transport is ever created in
-this branch.
+Tailscale was evaluated, but its control-plane and DERP addresses can change
+and a heartbeat, GUI ordering or asynchronous exit-node callback cannot prove
+that the outer boundary exists before Linux networking starts. Windows
+therefore refuses Tailscale install and start. Linux accepts a Tailscale
+profile only as a closed deny guard: `start` refuses that backend, so no
+transport is created in this branch.
 
 The supported backend is WireGuard with a fixed numeric IPv4 endpoint, UDP port
 and peer public key. DNS bootstrap does not occur. Runtime failure does not
 switch backends, broaden the endpoint rule or restore direct access.
 
-## Trust assumptions and exclusions
+## Threat and verification boundaries
 
+- A Windows administrator or Linux root can replace the enforcement components
+  and is outside the threat model.
+- A root or privileged workload that can modify its own namespace is outside
+  the launcher boundary.
+- An ordinary distro shell retains visible `/mnt/*`; only the strict launcher
+  creates a private mount view without those host mounts.
+- Interop being disabled prevents normal Windows executable invocation. It does
+  not by itself hide every host file or prove that an application cannot infer
+  local metadata.
+- `protected-connections.json` is a required operator prerequisite for the
+  Windows mutation path. Its absence blocks the deployment; it is not a default
+  resource.
+- Network reachability is not proof of the VPS source. A provider test is
+  accepted only after the current generation proves the public IPv4 and tunnel
+  path. Provider login, authentication and inference remain separate claims.
+- The unified workspace-tool installer cannot change packages until it observes
+  the configured VPS IPv4 from inside the strict launcher. A source-code
+  review or offline test does not establish that the gate has run on the live
+  tunnel.
 - A hostile Windows administrator or Linux root can replace the enforcement
   components and is outside the protected-user threat model.
-- A privileged process inside the workload can change its own networking and
-  is outside the launcher boundary. The launcher is for unprivileged apps.
+- A privileged workload that can change its networking or namespace is outside
+  the launcher boundary.
+
+## Trust assumptions and exclusions
 - Docker Desktop receives network containment only until its independent host
   backend adapter is implemented and verified.
 - DoH/DoT by applications is carried through the tunnel; only port-53 resolver

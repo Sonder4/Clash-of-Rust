@@ -153,6 +153,34 @@ fn wsl_actual_deployment_is_separate_from_installation_draft_and_global_core() {
 }
 
 #[test]
+fn wsl_prepared_for_reinstall_keeps_protected_deployment_and_recovery_controls() {
+    use clash_client_core::wsl::Action as W;
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Wsl);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let ticket = app
+        .wsl
+        .evidence
+        .begin(app.wsl.draft.request(W::Status, false))
+        .unwrap();
+    let mut report = wsl_report(W::Status, 10);
+    report.phase = "prepared_for_reinstall".into();
+    report.outcome = clash_client_core::wsl::Outcome::Succeeded;
+    let _ = app.update(Message::Wsl(wsl::Event::Finished(
+        ticket,
+        Box::new(Ok(report)),
+        String::new(),
+    )));
+    app.present(&data, &mut models);
+    assert!(data.get_wsl_installed());
+    assert_eq!(data.get_wsl_phase(), "prepared_for_reinstall");
+    assert!(data.get_wsl_deployment().contains("generation 10"));
+}
+
+#[test]
 fn wsl_restore_requires_a_separate_confirmation_and_cancel_keeps_policy_untouched() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Wsl);
@@ -217,24 +245,34 @@ fn wsl_native_buttons_dispatch_preview_and_busy_state_keeps_navigation_available
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    let mut doctor_y = None;
+    // The compact WSL page exposes Status, install preflight and Test in its
+    // action row. Leave recovery and configuration behind "高级".
+    let mut preflight_y = None;
     // Text metrics vary across platforms; probe the small first-row region,
     // not the full window, and never execute any recorded network intent.
-    for y in (144..216).step_by(8) {
-        events.borrow_mut().clear();
-        ui_testing::click(window.window(), 250.0, y as f32);
-        if events.borrow().iter().any(|(intent, action, mode)| {
-            *intent == Intent::WslAction && action == "Doctor" && mode == "preview"
-        }) {
-            doctor_y = Some(y as f32);
+    // Text ascent and card spacing depend on the renderer. Probe only the
+    // action card and stop at the first matching install-preview intent.
+    for y in (180..620).step_by(8) {
+        for x in (280..840).step_by(48) {
+            events.borrow_mut().clear();
+            ui_testing::click(window.window(), x as f32, y as f32);
+            if events.borrow().iter().any(|(intent, action, mode)| {
+                *intent == Intent::WslAction && action == "Install" && mode == "preview"
+            }) {
+                preflight_y = Some(y as f32);
+                break;
+            }
+        }
+        if preflight_y.is_some() {
             break;
         }
     }
-    let doctor_y = doctor_y.expect("native Doctor button must emit the read-only preview intent");
+    let preflight_y = preflight_y
+        .expect("native install preflight button must emit the read-only preview intent");
     events.borrow_mut().clear();
     data.set_wsl_busy(true);
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 250.0, doctor_y);
+    ui_testing::click(window.window(), 250.0, preflight_y);
     assert!(
         events.borrow().is_empty(),
         "busy controls must suppress duplicate operations"
@@ -242,6 +280,15 @@ fn wsl_native_buttons_dispatch_preview_and_busy_state_keeps_navigation_available
     ui_testing::click(window.window(), 65.0, 156.0);
     assert_eq!(events.borrow().last().unwrap().0, Intent::Navigate);
     window.hide().unwrap();
+}
+
+#[test]
+fn wsl_compact_page_retains_explicit_restore_confirmation_entry() {
+    let source = include_str!("../../../../crates/client-ui/ui/pages/wsl.slint");
+    assert!(source.contains("text: \"恢复原网络\""));
+    assert!(source.contains("action: \"Rollback\""));
+    assert!(source.contains("mode: \"restore-confirm\""));
+    assert!(source.contains("danger: true"));
 }
 
 #[test]
@@ -699,6 +746,11 @@ fn fixture(page: Page) -> App {
 
 type UiEventLog = std::rc::Rc<RefCell<Vec<(Intent, slint::SharedString, slint::SharedString)>>>;
 fn pointer_events(window: &AppWindow) -> UiEventLog {
+    // Existing interaction assertions intentionally inspect the settled UI.
+    // Dedicated motion tests below enable animations and advance the clock.
+    window
+        .global::<clash_client_ui::Motion>()
+        .set_enabled(false);
     let events = std::rc::Rc::new(RefCell::new(Vec::new()));
     let recorded = events.clone();
     window
@@ -1198,5 +1250,222 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     assert_eq!(app.list_offset, 0);
     assert_eq!(data.get_logs().row_count(), 1);
     assert_eq!(data.get_logs().row_data(0).unwrap().message, long.as_str());
+    window.hide().unwrap();
+}
+
+fn motion_frame(window: &AppWindow, milliseconds: u64) -> Vec<u8> {
+    // Evaluate newly retargeted properties before moving the test clock.
+    slint::platform::update_timers_and_animations();
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::advance(milliseconds);
+    window.window().take_snapshot().unwrap().as_bytes().to_vec()
+}
+
+#[test]
+fn motion_overlays_reverse_on_reopen_release_content_and_leave_no_idle_clock() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let motion = window.global::<clash_client_ui::Motion>();
+    motion.set_enabled(true);
+    data.set_dark(true);
+    window.show().unwrap();
+    let initial = motion_frame(&window, 0);
+    // Saved dark appearance is already present in the first rendered frame.
+    let canvas = (690 * 950 + 940) * 4;
+    assert_eq!(&initial[canvas..canvas + 3], &[0x11, 0x19, 0x23]);
+    motion_frame(&window, 250);
+    assert!(
+        motion.get_initialized(),
+        "startup must enable the motion scope"
+    );
+    assert!(motion.get_enabled());
+    assert!(!window.window().has_active_animations());
+
+    for _ in 0..3 {
+        data.set_modal_title("确认操作".into());
+        data.set_modal_description("用于验证真实弹窗的退出与重新打开。".into());
+        data.set_modal(1);
+        motion_frame(&window, 2);
+        assert!(window.get_modal_mounted());
+        motion_frame(&window, 250);
+        data.set_modal(0);
+        motion_frame(&window, 30);
+        assert!(
+            window.get_modal_mounted(),
+            "closing content must survive the fade"
+        );
+        data.set_modal(1);
+        motion_frame(&window, 250);
+        assert!(
+            window.get_modal_mounted(),
+            "reopen must cancel the old disposal timer"
+        );
+        data.set_modal(0);
+        motion_frame(&window, 250);
+        assert!(
+            !window.get_modal_mounted(),
+            "closed content must be released"
+        );
+    }
+
+    data.set_notice("配置已更新".into());
+    data.set_notice_revision(1);
+    motion_frame(&window, 2);
+    motion_frame(&window, 250);
+    assert!(window.get_notice_mounted());
+    data.set_notice("".into());
+    motion_frame(&window, 30);
+    assert!(window.get_notice_mounted());
+    data.set_notice("新通知".into());
+    data.set_notice_revision(2);
+    motion_frame(&window, 250);
+    assert!(window.get_notice_mounted());
+    data.set_notice("".into());
+    motion_frame(&window, 250);
+    assert!(!window.get_notice_mounted());
+    motion_frame(&window, 1200);
+    assert!(!window.window().has_active_animations());
+    assert!(
+        slint::platform::duration_until_next_timer_update().is_none(),
+        "one-shot motion timers must stop instead of ticking forever"
+    );
+    window.hide().unwrap();
+}
+
+#[test]
+fn motion_does_not_delay_connection_sort_arrow_or_third_click_reset() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Connections);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    let events = pointer_events(&window);
+    window.global::<clash_client_ui::Motion>().set_enabled(true);
+    window.show().unwrap();
+    motion_frame(&window, 250);
+    let before = motion_frame(&window, 0);
+    for click in 0..3 {
+        ui_testing::rapid_click(window.window(), 780., 174.);
+        let (intent, a, b) = events.borrow_mut().pop().unwrap();
+        assert_eq!(intent, Intent::ConnectionSort);
+        let _ = app.intent(intent, &a, &b);
+        app.present(&data, &mut models);
+        let immediately = motion_frame(&window, 0);
+        let header = |pixels: &[u8]| {
+            pixels
+                .as_chunks::<{ 950 * 4 }>()
+                .0
+                .iter()
+                .skip(156)
+                .take(52)
+                .flat_map(|row| row[740 * 4..820 * 4].iter().copied())
+                .collect::<Vec<_>>()
+        };
+        if click < 2 {
+            assert_ne!(
+                header(&immediately),
+                header(&before),
+                "the direction must render in the same frame as sorting"
+            );
+        }
+        assert_eq!(
+            data.get_connection_sort(),
+            if click == 2 { "" } else { "download-rate" }
+        );
+    }
+    motion_frame(&window, 250);
+    assert!(!window.window().has_active_animations());
+    window.hide().unwrap();
+}
+
+#[test]
+fn copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Logs);
+    app.snapshot.logs = vec!["[info] copy fixture".into()];
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    let events = pointer_events(&window);
+    window.global::<clash_client_ui::Motion>().set_enabled(true);
+    window.show().unwrap();
+    motion_frame(&window, 250);
+    ui_testing::rapid_click(window.window(), 876., 196.);
+    let (_, value, _) = events.borrow_mut().pop().unwrap();
+    let waiting = motion_frame(&window, 250);
+    data.set_copy_value("another request".into());
+    data.set_copy_revision(1);
+    assert_eq!(
+        waiting,
+        motion_frame(&window, 250),
+        "unrelated or failed writes must not display success"
+    );
+    ui_testing::rapid_click(window.window(), 876., 196.);
+    data.set_copy_value(value);
+    data.set_copy_revision(2);
+    motion_frame(&window, 0);
+    let copied = motion_frame(&window, 250);
+    assert_ne!(waiting, copied);
+    motion_frame(&window, 1100);
+    let restored = motion_frame(&window, 250);
+    assert_eq!(
+        waiting, restored,
+        "copy feedback must restore both the label and geometry"
+    );
+    assert!(!window.window().has_active_animations());
+    window.hide().unwrap();
+}
+
+#[test]
+fn motion_group_collapse_is_persisted_before_exit_and_navigation_drops_nodes() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Proxies);
+    app.expanded.insert("Proxy".into());
+    app.snapshot.proxies = serde_json::from_value(serde_json::json!({"proxies": {
+        "Proxy": {"type":"Selector", "now":"one", "all":["one"]},
+        "one": {"type":"AnyTLS", "history":[{"delay":20}]}
+    }}))
+    .unwrap();
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    let events = pointer_events(&window);
+    window.global::<clash_client_ui::Motion>().set_enabled(true);
+    window.show().unwrap();
+    motion_frame(&window, 250);
+    for expanded in [false, true, false] {
+        ui_testing::rapid_click(window.window(), 400., 185.);
+        let (intent, a, b) = events
+            .borrow_mut()
+            .pop()
+            .expect("expansion changes immediately");
+        assert_eq!(intent, Intent::ToggleGroup);
+        assert!(events.borrow().is_empty());
+        let _ = app.intent(intent, &a, &b);
+        app.present(&data, &mut models);
+        assert_eq!(app.expanded.contains("Proxy"), expanded);
+        assert_eq!(
+            data.get_groups().row_data(0).unwrap().nodes.row_count(),
+            usize::from(expanded)
+        );
+        motion_frame(&window, 30);
+    }
+    // Leave before the final collapse finishes: its state must not be lost.
+    let _ = app.intent(Intent::Navigate, "0", "");
+    app.present(&data, &mut models);
+    motion_frame(&window, 250);
+    assert_eq!(models.groups.row_count(), 0);
+    assert!(!app.expanded.contains("Proxy"));
+    assert!(
+        events.borrow().is_empty(),
+        "no delayed group command after leaving"
+    );
     window.hide().unwrap();
 }

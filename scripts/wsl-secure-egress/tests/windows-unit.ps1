@@ -42,6 +42,8 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal $roundtrip.single.Count 1 'single-item journal array has one item'
     Assert-Equal $roundtrip.multiple.Count 2 'multi-item journal array retains both items'
     Assert-Equal ($roundtrip.map -is [Collections.IDictionary]) $true 'JSON maps remain dictionaries'
+    $legacyPending = ConvertTo-WslEgressOrderedState ('{"distro_config_pending":[null]}' | ConvertFrom-Json)
+    Assert-Equal (@($legacyPending.distro_config_pending | Where-Object { $null -ne $_ }).Count) 0 'a serialized null pending item is not a configured distro'
     $doctor = Invoke-WslEgressOperation -Action Doctor
     Assert-Equal $doctor.outcome 'succeeded' 'doctor works without administrator'
     Assert-Equal $doctor.protection 'unknown' 'uninstalled does not claim protection'
@@ -159,6 +161,94 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal ($upgradeText.Contains('repair-config')) $true 'live upgrade reruns the manager repair path'
     Assert-Equal ($upgradeText.Contains('-ReviewedUpgrade')) $true 'live upgrade uses the atomic reviewed upgrade gate'
     Assert-Equal ($upgradeText.Contains('Set-WslEgressEndpoint $state $true')) $false 'live upgrade never opens the endpoint'
+    Assert-Equal ($upgradeText.Contains('$Progress.stage')) $true 'live upgrade records the in-memory failure stage'
+    Assert-Equal ($upgradeText.Contains('$stageStatusPath')) $true 'live upgrade records the exact failure stage across module scope'
+    Assert-Equal ($upgradeText.Contains('$StatusFile')) $true 'live upgrade writes each module stage to the caller-owned status file'
+    $stageFixture = Join-Path ([IO.Path]::GetTempPath()) ('cor-egress-stage-' + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+        $script = {
+            param($StatusPath)
+            $stageModule = New-Module -ScriptBlock {
+                function Set-Stage([string]$Path) {
+                    [ordered]@{ stage = 'manager_repair' } | ConvertTo-Json -Compress |
+                        Set-Content -LiteralPath $Path -Encoding ASCII
+                }
+                Export-ModuleMember -Function Set-Stage
+            } | Import-Module -PassThru
+            & $stageModule { param($Path) Set-Stage $Path } $StatusPath
+        }
+        & $script $stageFixture
+        $stageRecord = Get-Content -LiteralPath $stageFixture -Raw | ConvertFrom-Json
+        Assert-Equal $stageRecord.stage 'manager_repair' 'module failure stage survives caller scope'
+    } finally {
+        Remove-Item -LiteralPath $stageFixture -Force -ErrorAction SilentlyContinue
+    }
+    # Use the real local SID/account mapping without touching Task Scheduler.
+    # On the regression host this is XUAN\xuan; resolving bare "xuan" fails,
+    # which exercises the short-name readback fallback used by Task Scheduler.
+    $renewalOwner = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $renewalAccount = $renewalOwner.Translate([Security.Principal.NTAccount]).Value
+    $renewalShortName = ($renewalAccount -split '\\')[-1]
+    $renewalDefinition = [pscustomobject]@{
+        name = 'ClashOfRust-WslEgress-Renew'; path = '\'
+        executable = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+        arguments = '-NoLogo -NoProfile -NonInteractive -File "C:\Program Files\Clash of Rust WSL\Renew-ScopeAttestation.ps1"'
+        owner_sid = $renewalOwner.Value; owner_account = $renewalAccount
+    }
+    $renewalTask = [pscustomobject]@{
+        TaskName = $renewalDefinition.name; TaskPath = $renewalDefinition.path
+        Principal = [pscustomobject]@{ UserId = $renewalShortName; LogonType = 'Interactive'; RunLevel = 'Highest' }
+        Actions = @([pscustomobject]@{
+            Execute = $renewalDefinition.executable; Arguments = $renewalDefinition.arguments
+            WorkingDirectory = ''
+        })
+    }
+    $renewalXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><URI>\ClashOfRust-WslEgress-Renew</URI></RegistrationInfo>
+  <Principals><Principal id="Author">
+    <UserId>$($renewalOwner.Value)</UserId>
+    <LogonType>InteractiveToken</LogonType>
+    <RunLevel>HighestAvailable</RunLevel>
+  </Principal></Principals>
+  <Actions Context="Author"><Exec>
+    <Command>$($renewalDefinition.executable)</Command>
+    <Arguments>$($renewalDefinition.arguments)</Arguments>
+  </Exec></Actions>
+</Task>
+"@
+    function script:Invoke-WslEgressRenewalTaskQuery { $renewalXml }
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $true 'real local short owner name is accepted for renewal task readback'
+    foreach ($identity in @($renewalOwner.Value, $renewalAccount)) {
+        $renewalTask.Principal.UserId = $identity
+        Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $true 'the same renewal owner is accepted by SID and qualified account'
+    }
+    $renewalTask.Principal.UserId = 'S-1-5-18'
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $false 'a different valid principal SID is refused'
+    $renewalTask.Principal.UserId = $renewalShortName + '-not-the-owner'
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $false 'a different unqualified principal is refused'
+    $renewalTask.Principal.UserId = $renewalShortName
+    $renewalTask.Principal.RunLevel = 'Limited'
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $false 'a renewal task without Highest run level is refused'
+    $renewalTask.Principal.RunLevel = 'Highest'
+    $renewalTask.Principal.LogonType = 'Password'
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $false 'a noninteractive renewal principal is refused'
+    $renewalTask.Principal.LogonType = 'Interactive'
+    $renewalTask.Actions[0].Arguments = $renewalDefinition.arguments.Replace('Renew-ScopeAttestation.ps1', 'another-script.ps1')
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $false 'a different renewal script path is refused'
+    $renewalTask.Actions[0].Arguments = $renewalDefinition.arguments
+    $renewalTask.Actions[0].Execute = 'C:\untrusted\powershell.exe'
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $false 'a different renewal interpreter path is refused'
+    $renewalTask.Actions[0].Execute = $renewalDefinition.executable
+    $renewalTask.Actions[0].WorkingDirectory = 'C:\untrusted'
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $false 'an unexpected renewal working directory is refused'
+    $renewalTask.Actions[0].WorkingDirectory = ''
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $true 'restored renewal fixture retains the intended identity'
+    $renewalTask.Principal.UserId = $renewalShortName
+    $renewalTask.Actions[0].Arguments = $renewalDefinition.arguments
+    function script:Invoke-WslEgressRenewalTaskQuery { $renewalXml.Replace($renewalOwner.Value, 'S-1-5-18') }
+    Assert-Equal (Test-WslEgressRenewalTaskIdentity $renewalTask $renewalDefinition) $false 'short principal is refused when fixed task XML proves another SID'
     $uninstallCheckPath = Join-Path $PSScriptRoot '../Uninstall-Check.ps1'
     $uninstallTokens = $null
     $uninstallErrors = $null
@@ -214,7 +304,7 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     $temporaryRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) ('cor-egress-archive-test-' + [guid]::NewGuid().ToString('N'))))
     New-Item -ItemType Directory -Path $temporaryRoot -ErrorAction Stop | Out-Null
     try {
-        foreach ($scenario in @('valid', 'tampered-snapshot', 'missing-snapshot')) {
+        foreach ($scenario in @('valid', 'retained-live-state', 'tampered-snapshot', 'missing-snapshot')) {
             $script:StateRoot = Join-Path $temporaryRoot $scenario
             New-Item -ItemType Directory -Path $script:StateRoot -ErrorAction Stop | Out-Null
             $snapshot = Join-Path $script:StateRoot 'wslconfig.before'
@@ -234,12 +324,12 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
             if ($scenario -eq 'tampered-snapshot') { [IO.File]::AppendAllText($snapshot, "# later edit`n") }
             if ($scenario -eq 'missing-snapshot') { Remove-Item -LiteralPath $snapshot -ErrorAction Stop }
             $archiveRejected = $false
-            try { $archive = Save-WslEgressRestoredGeneration $archiveState }
+            try { $archive = Save-WslEgressRestoredGeneration $archiveState -RetainLiveState:($scenario -eq 'retained-live-state') }
             catch {
                 if ($_.Exception.Message -notlike '*snapshot failed verification*') { throw }
                 $archiveRejected = $true
             }
-            Assert-Equal $archiveRejected ($scenario -ne 'valid') "$scenario archive accepts only the recorded snapshot"
+            Assert-Equal $archiveRejected ($scenario -in @('tampered-snapshot', 'missing-snapshot')) "$scenario archive accepts only the recorded snapshot"
             Assert-Equal (Get-WslEgressFileHash (Join-Path $script:StateRoot 'unrelated-recovery.json')) $unrelatedHash "$scenario archive preserves unrelated recovery data"
             if ($archiveRejected) {
                 Assert-Equal (Get-WslEgressFileHash (Join-Path $script:StateRoot 'state.json')) $liveStateHash "$scenario archive preserves the live journal after failed verification"
@@ -255,7 +345,20 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
             Assert-Equal (Get-WslEgressFileHash (Join-Path $archive 'wslconfig.before')) $archiveState.wslconfig.before_hash 'real archived snapshot matches its recorded SHA256'
             foreach ($name in @('state.json', 'wslconfig.before', 'scope-renewal.json', 'guardian-audit.json')) {
                 Assert-Equal (Test-Path -LiteralPath (Join-Path $archive $name) -PathType Leaf) $true "verified archive retains $name"
-                Assert-Equal (Test-Path -LiteralPath (Join-Path $script:StateRoot $name)) $false "verified archive retires live $name only after readback"
+                Assert-Equal (Test-Path -LiteralPath (Join-Path $script:StateRoot $name)) ($scenario -eq 'retained-live-state') "verified archive retires live $name only when requested after readback"
+            }
+            if ($scenario -eq 'retained-live-state') {
+                Assert-Equal (Get-WslEgressFileHash (Join-Path $script:StateRoot 'state.json')) $liveStateHash 'reinstall archive leaves the exact restored journal available until generation cutover'
+                $nextState = [ordered]@{ phase = 'preparing'; generation = 68; endpoint_enabled = $false }
+                Save-WslEgressJson $nextState (Join-Path $script:StateRoot 'state.json')
+                $nextStateHash = Get-WslEgressFileHash (Join-Path $script:StateRoot 'state.json')
+                Complete-WslEgressGenerationCutover
+                Assert-Equal (Get-WslEgressFileHash (Join-Path $script:StateRoot 'state.json')) $nextStateHash 'real generation cutover preserves the newly saved journal'
+                foreach ($name in @('wslconfig.before', 'scope-renewal.json', 'guardian-audit.json')) {
+                    Assert-Equal (Test-Path -LiteralPath (Join-Path $script:StateRoot $name)) $false "real generation cutover retires old $name"
+                    Assert-Equal (Test-Path -LiteralPath (Join-Path $archive $name) -PathType Leaf) $true "real generation cutover preserves archived $name"
+                }
+                Assert-Equal (Get-WslEgressFileHash (Join-Path $script:StateRoot 'unrelated-recovery.json')) $unrelatedHash 'real generation cutover preserves unrelated recovery data'
             }
         }
     } finally {
@@ -270,4 +373,8 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     }
     [pscustomobject]@{ suite = 'windows-offline'; result = 'PASS'; assertions = $script:TestCount
         network_tests = 'NOT_RUN'; wsl_started = $false; firewall_modified = $false } | ConvertTo-Json -Compress
+    exit 0
+} catch {
+    Write-Error $_
+    exit 1
 }

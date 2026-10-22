@@ -229,6 +229,7 @@ impl Report {
                 "uninstalled",
                 "preflight",
                 "preparing",
+                "prepared_for_reinstall",
                 "blocked",
                 "failed",
                 "installed_closed",
