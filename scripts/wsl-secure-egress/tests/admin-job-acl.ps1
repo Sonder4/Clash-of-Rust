@@ -80,8 +80,26 @@ foreach ($expected in @(
         throw "Missing network snapshot contract: $expected"
     }
 }
+foreach ($expected in @(
+    'Assert-NormalDirectoryPath',
+    'endpoint-rules-persistent.json',
+    'endpoint-rules-effective.json',
+    '-PolicyStore PersistentStore',
+    '-PolicyStore ActiveStore'
+)) {
+    if (-not $snapshotSource.Contains($expected)) {
+        throw "Missing durable snapshot contract: $expected"
+    }
+}
 if ($snapshotSource -match 'profile\.json|private_key|Queries\s*=') {
     throw 'Network snapshots must exclude private profile content and firewall queries.'
+}
+
+$secondStop = $source.IndexOf(
+    '$null = Assert-AllWslStopped', $snapshotGate + 1,
+    [StringComparison]::Ordinal)
+if ($secondStop -le $snapshotGate -or $secondStop -ge $profileRestore) {
+    throw 'The stop gate must run again after the snapshot and before profile restoration.'
 }
 
 $start = $source.IndexOf('function Set-ProtectedDirectoryAcl', [StringComparison]::Ordinal)

@@ -8,17 +8,18 @@ This comparison was checked on 2026-10-22:
   `2615ebc96f9f510802194727a6108bde73f4c8ed`, version 0.6.1.
 - User fork: `Sonder4/Clash-of-Rust`, PR #3, branch
   `fix/wsl-recovery-review-20261018`.
-- Last CI-verified fork head: `87ef6b206c49446bd9ed614923a6381a346d16a8`.
+- Last CI-verified fork head:
+  `8f158211e987ca60bc5075995991a1328a113f90`.
 - Graph relation at that head:
-  `git rev-list --left-right --count upstream/main...HEAD` returned `0 73`:
-  zero commits behind and 73 fork commits ahead.
+  `git rev-list --left-right --count upstream/main...HEAD` returned `0 78`:
+  zero commits behind and 78 fork commits ahead at `37dfafd`.
 - Delivery target is the user's fork only. No upstream PR is authorized.
 
-The old head `87ef6b2` has a successful GitHub `CI` workflow and a successful
+The head `8f15821` has a successful GitHub `CI` workflow and a successful
 `WSL Secure Egress` workflow. This proves the exact commit in those runs. The
-worktree subsequently contains profile restore, package staging, additional
-review tests, tool installer work and documentation changes. Those changes are
-not covered by the old-head CI result until committed, pushed and run again.
+later `37dfafd` build-verification change and the pending snapshot-test
+contract update are not covered by that result until committed, pushed and
+run again.
 
 The initial WSL work began from an older upstream release. The feature branch
 was later synchronized with upstream 0.6.1 and then the fork-only code was

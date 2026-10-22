@@ -19,8 +19,8 @@ The current host is installed but deliberately disconnected:
 | Item | Current readback |
 | --- | --- |
 | Upstream baseline | `2615ebc` |
-| Last CI-verified branch head | `87ef6b2` (`0` behind and `73` ahead before later work) |
-| Current worktree | Additional review and recovery fixes are not yet represented by a CI run |
+| Last CI-verified branch head | `8f15821` (`0` behind and `78` ahead at `37dfafd`) |
+| Current worktree | Build verification is committed; its CI run is pending |
 | Windows WireGuard profile | `MISSING` at the protected Windows target |
 | Windows broker | `failed_closed_requested` |
 | Hyper-V endpoint exception | Present, `Enabled=False` |

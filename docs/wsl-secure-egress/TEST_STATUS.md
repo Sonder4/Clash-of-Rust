@@ -11,9 +11,9 @@ They do not describe the current host state.
 | Item | Current read-only evidence |
 | --- | --- |
 | Upstream | `2615ebc96f9f510802194727a6108bde73f4c8ed` |
-| Last CI-verified head | `87ef6b206c49446bd9ed614923a6381a346d16a8` |
-| Branch relation | `0` behind, `73` ahead at the verified head |
-| Current worktree | Contains later uncommitted review, recovery, installer and documentation work |
+| Last CI-verified head | `8f158211e987ca60bc5075995991a1328a113f90` |
+| Branch relation | `0` behind, `78` ahead at `37dfafd` after the upstream fetch |
+| Current worktree | One committed build-verification change (`37dfafd`) and one pending test-contract update |
 | Installed desktop | Clash of Rust 0.6.0 under `C:\Program Files\Clash of Rust` |
 | Source version | Upstream 0.6.1 synchronized; not installed over the 0.6.0 desktop |
 | `.wslconfig` | NAT, `localhostForwarding=false`, `dnsTunneling=false`, `autoProxy=false`, `firewall=true` |
@@ -32,6 +32,34 @@ They do not describe the current host state.
 
 The current fail-closed state takes precedence over the historical
 2026-10-18 tunnel results below.
+
+### 2026-10-22 build-verification and snapshot-gate validation
+
+The following commands ran after the earlier staging work and before a new
+hosted CI result was available for the pending test-contract commit:
+
+| Check | Actual result |
+| --- | --- |
+| `tests/prepare-package-stage-unit.ps1` | PASS, 75 assertions |
+| `tests/admin-job-acl.ps1` | PASS, 44 assertions; consent `NOT_RUN` |
+| `tests/windows-unit.ps1` | PASS, 166 assertions |
+| `tests/windows-workflow.ps1` | PASS, 244 assertions |
+| `tests/provision_unit.py` | PASS, 27 tests |
+| `ClashOfWsl/Test-ClashOfWsl.ps1` | PASS, 34 assertions; live checks `NOT_RUN` |
+| `verify-build.py` against downloaded `8f15821` artifact | FAIL as expected: source commit differs from `37dfafd` |
+| `python scripts/build_inputs.py resolve` | FAIL before writing `inputs.json`: local host has no `go` executable |
+| GitHub CI at `8f15821` | PASS, all 13 checks completed successfully |
+| UAC and live network transaction | `NOT_RUN` |
+
+The staging unit now requires a release manifest bound to the current source
+commit and never falls back to an unverified `target\debug` binary. The
+administrator snapshot records Hyper-V settings and the owned Endpoint rule
+from both `PersistentStore` and `ActiveStore`, rejects redirected snapshot
+paths, and confirms all WSL distributions remain stopped after collection.
+
+The failed dependency-resolution command ran `cargo update` before stopping
+at the missing Go executable. `Cargo.lock` was restored to the committed
+version before any test or commit. No dependency lockfile change is claimed.
 
 ## Local offline checks
 
@@ -615,7 +643,7 @@ was changed by these tests.
 | Windows elevation | PASS, 21 assertions; consent `NOT_RUN` |
 | Administrator argument vector and ACL | PASS, 25 assertions; consent `NOT_RUN` |
 | Profile restore | PASS, 18 assertions |
-| Package staging | PASS, 70 assertions |
+| Package staging | PASS, 75 assertions |
 | Package upgrade | PASS, 53 assertions |
 | Clash of WSL | PASS, 34 assertions; live tests `NOT_RUN` |
 | Linux static and boot guard | PASS, 87 tests, 2 skipped |
@@ -848,7 +876,7 @@ ACL was changed by these tests.
 | Check | Result |
 | --- | --- |
 | PowerShell parser, administrator job and ACL test | PASS |
-| Administrator ACL/argv regression | PASS, 25 assertions; consent `NOT_RUN` |
+| Administrator ACL/argv regression | PASS, 44 assertions; consent `NOT_RUN` |
 | Windows broker unit | PASS, 166 assertions |
 | Windows workflow | PASS, 244 assertions |
 | Package staging | PASS, 70 assertions |
