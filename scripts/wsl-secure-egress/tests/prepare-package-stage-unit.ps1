@@ -159,7 +159,30 @@ try {
         }
     }
     $fakeCommit = ('a' * 40)
-    $fakeLockHash = ('b' * 64)
+    # The staging contract requires the frozen dependency snapshot that the
+    # production verifier consumes. The fixture mirrors the shape of a real
+    # build_inputs block so the snapshot reconstruction path is exercised.
+    $fakeLock = Join-Path $repo 'Cargo.lock'
+    if (-not (Test-Path -LiteralPath $fakeLock -PathType Leaf)) {
+        [IO.File]::WriteAllText($fakeLock, 'fixture lock')
+    }
+    $fakeLockHash = (Get-Hash $fakeLock).ToLowerInvariant()
+    $dependencyFiles = [ordered]@{
+        'Cargo.lock' = $fakeLockHash
+    }
+    $buildInputs = [ordered]@{
+        schema = 1
+        commit = $fakeCommit
+        baseline = [ordered]@{ 'Cargo.lock' = $fakeLockHash }
+        constraints = [ordered]@{}
+        files = $dependencyFiles
+        rust_packages = @()
+        go_modules = @()
+        policy = 'fixture'
+        resolved_at = 'fixture'
+        upstream = [ordered]@{}
+        warnings = @()
+    }
     [IO.File]::WriteAllText(
         (Join-Path $build 'manifest.json'),
         ([ordered]@{
@@ -173,22 +196,41 @@ try {
             rustc = 'fixture'
             tests = [ordered]@{ core_integration = 'tests/core_integration.exe' }
             files = $files
+            build_inputs = $buildInputs
         } | ConvertTo-Json -Depth 8))
 
     # The production verifier is replaced by a source-equal fixture that
     # validates the same manifest and hash contract without requiring native
-    # PE inspection. Native verification runs in the CI workflow.
+    # PE inspection. Native verification runs in the CI workflow. The fixture
+    # accepts the reconstructed dependency snapshot exactly as production does
+    # and refuses a missing or wrong snapshot.
     $verifierPath = Join-Path $module 'verify-build.py'
     $verifierSource = @'
 import argparse, hashlib, json
 from pathlib import Path
-p=argparse.ArgumentParser(); p.add_argument('--repository'); p.add_argument('--build'); p.add_argument('--system'); p.add_argument('--arch'); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--repository'); p.add_argument('--build'); p.add_argument('--dependency-snapshot'); p.add_argument('--system'); p.add_argument('--arch'); a=p.parse_args()
 b=Path(a.build); m=json.loads((b/'manifest.json').read_text())
 assert (m['system'],m['arch'],m['profile'],m['version']) == ('windows','x64','release','0.6.1')
 for rel, rec in m['files'].items():
     path=b/rel
     assert path.is_file() and path.stat().st_size == rec['size']
     assert hashlib.sha256(path.read_bytes()).hexdigest() == rec['sha256']
+snap=Path(a.dependency_snapshot)
+assert (snap/'inputs.json').is_file(), 'the frozen dependency snapshot is required'
+value=json.loads((snap/'inputs.json').read_text())
+frozen=m.get('build_inputs')
+assert isinstance(frozen, dict), 'the build manifest omits the frozen dependency snapshot'
+for key in ('commit','baseline','constraints','files'):
+    assert frozen.get(key)==value.get(key), 'dependency snapshot '+key+' differs from the build manifest'
+assert value.get('schema')==1, 'unsupported dependency snapshot schema'
+assert value.get('commit')==m.get('commit'), 'dependency snapshot commit differs from the build commit'
+files=value.get('files')
+assert isinstance(files, dict) and files, 'the dependency snapshot contains no resolved files'
+assert m.get('cargo_lock_sha256')==files.get('Cargo.lock'), 'lockfile hash differs from the dependency snapshot'
+for relative, checksum in files.items():
+    path=snap/relative
+    assert path.is_file() and not path.is_symlink(), 'snapshot file missing: '+relative
+    assert hashlib.sha256(path.read_bytes()).hexdigest()==checksum, 'snapshot checksum mismatch: '+relative
 print(json.dumps({'schema_version':1,'outcome':'verified','commit':m['commit'],'version':m['version'],'system':m['system'],'arch':m['arch'],'profile':m['profile'],'manifest_sha256':hashlib.sha256((b/'manifest.json').read_bytes()).hexdigest(),'files':len(m['files']),'source_artifact':None}))
 '@
     [IO.File]::WriteAllText($verifierPath, $verifierSource)

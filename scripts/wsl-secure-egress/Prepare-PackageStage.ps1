@@ -173,6 +173,57 @@ function Write-ReceiptAtomically([string]$TemporaryPath, [string]$FinalPath, [st
     }
 }
 
+function Get-DependencySnapshot([string]$Repository, [string]$BuildPath) {
+    # The verifier requires the frozen dependency snapshot as a directory that
+    # still holds inputs.json. A published build only carries the same object
+    # inside manifest.json under build_inputs, so reconstruct it byte-for-byte
+    # and verify every referenced file against the current worktree before the
+    # verifier is allowed to trust it.
+    $build = [IO.Path]::GetFullPath($BuildPath).TrimEnd('\')
+    $manifestPath = Join-Path $build 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw 'The build manifest is missing; a verified build is required.'
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $inputs = $manifest.PSObject.Properties['build_inputs']
+    if (-not $inputs -or $null -eq $inputs.Value) {
+        throw 'The build manifest omits the frozen dependency snapshot.'
+    }
+    $directory = Join-Path $build 'dependency-snapshot'
+    Assert-NoReparseAncestor $directory
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    $document = $inputs.Value | ConvertTo-Json -Depth 20
+    [IO.File]::WriteAllText((Join-Path $directory 'inputs.json'), $document,
+        [Text.UTF8Encoding]::new($false))
+    $snapshot = $document | ConvertFrom-Json
+    foreach ($name in @('commit', 'baseline', 'constraints', 'files')) {
+        if ($null -eq $snapshot.PSObject.Properties[$name]) {
+            throw ('The frozen dependency snapshot omits {0}.' -f $name)
+        }
+    }
+    foreach ($relative in @($snapshot.files.PSObject.Properties.Name)) {
+        $source = Join-Path $Repository $relative
+        $record = $snapshot.files.$relative
+        $destination = Join-Path $directory $relative
+        $parent = [IO.Path]::GetDirectoryName($destination)
+        if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw ('The dependency snapshot file is missing from the worktree: {0}' -f $relative)
+        }
+        $actual = Get-FileSha256 $source
+        if ($actual -ne [string]$record) {
+            throw ('The worktree differs from the frozen dependency snapshot: {0}' -f $relative)
+        }
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+        if ((Get-FileSha256 $destination) -ne [string]$record) {
+            throw ('The dependency snapshot copy verification failed: {0}' -f $relative)
+        }
+    }
+    $directory
+}
+
 function Get-VerifiedBuild([string]$Repository, [string]$BuildPath) {
     if ([string]::IsNullOrWhiteSpace($BuildPath)) {
         throw 'A verified Windows x64 build is required for administrator deployment.'
@@ -181,11 +232,13 @@ function Get-VerifiedBuild([string]$Repository, [string]$BuildPath) {
     if (-not (Test-Path -LiteralPath $verifier -PathType Leaf)) {
         throw 'The build verifier is missing.'
     }
+    $snapshot = Get-DependencySnapshot -Repository $Repository -BuildPath $BuildPath
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
         $raw = @(& $PythonExecutable $verifier --repository $Repository `
-            --build $BuildPath --system windows --arch x64 2>&1)
+            --build $BuildPath --dependency-snapshot $snapshot `
+            --system windows --arch x64 2>&1)
     } finally {
         $ErrorActionPreference = $previousPreference
     }
