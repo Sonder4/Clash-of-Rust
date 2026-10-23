@@ -44,6 +44,10 @@ record.
   defines the fixed Windows-to-Linux API.
 - [Implementation plan](../wsl-secure-egress-plan.md) preserves the accepted
   design and acceptance gates.
+- [Local operations](../../scripts/wsl-secure-egress/local-ops/README.md) indexes
+  this machine's migration, autostart and diagnostic scripts. They are local
+  tools, not part of the installed product, and every network-mutating one
+  requires the mandatory connectivity baseline first.
 
 ## Trusted resources
 
