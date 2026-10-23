@@ -49,6 +49,16 @@ record.
   tools, not part of the installed product, and every network-mutating one
   requires the mandatory connectivity baseline first.
 
+### Local run records
+
+These files record actual runs on this machine. They are not product
+acceptance evidence and do not replace [TEST_STATUS.md](TEST_STATUS.md).
+
+- [2026-10-22 code review](CODE_REVIEW_2026-10-22.md)
+- [2026-10-23 runtime diagnosis](DIAGNOSIS_2026-10-23.md)
+- [2026-10-23 Ubuntu-26.04 migration](UBUNTU26-MIGRATION-2026-10-23.md)
+- [2026-10-23 Ubuntu-22.04 cleanup plan](ubuntu22-cleanup-plan-2026-10-23.md)
+
 ## Trusted resources
 
 The Windows package includes the broker, SYSTEM audit entry point, WFP helper

@@ -308,6 +308,8 @@ REA 语义覆盖 partial，6 个 unpacked 原生文件与 ASAR 声明哈希不�
 
 结果概要：Ubuntu-26.04 已成为 manager，WireGuard 握手正常，WSL 出口实测为 VPS `62.84.164.122`；Hyper-V 对 WSL 默认拒绝，唯一放行 `UDP 51820 → 62.84.164.122`；Clash `run_mode` 持久化为 `rule`（备份在 `%TEMP%\wsl-egress-migration-20261023T\clash-settings.before.json`）；新增登录计划任务 `ClashOfRust-WslEgress-Autostart`，在登录后 30 秒自动恢复隧道，已用两次 `wsl --shutdown` 实测。
 
-重要边界：产品本身不自动建立隧道（boot hook 只恢复默认拒绝）；`wsl --shutdown` 无登录事件，需手动运行该任务或执行产品 Start；Ubuntu-22.04 必须保持运行，否则刷新任务会在 60 秒内关闭端点；主机冷启动尚未实测。两个发行版的旧 payload 与 journal 备份在各自 `/root/cor-egress-stale/`。未执行 fail-closed 隔离断连测试、逐跳定位、主机重启、网卡切换、Docker 受管出口与浏览器验收。
+重要边界：产品本身不自动建立隧道（boot hook 只恢复默认拒绝）；`wsl --shutdown` 无登录事件，需手动运行该任务或执行产品 Start；Ubuntu-22.04 必须保持运行，否则刷新任务会在 60 秒内关闭端点；主机冷启动尚未实测。两个发行版的旧 payload 与 journal 备份在各自 `/root/cor-egress-stale/`。失败关闭已在共享 netns 中实测（关闭 guard、删除 guard 表、启用端点后仍无出网），详见迁移文档 §8；未执行隔离环境断连测试、逐跳定位、主机重启、网卡切换、Docker 受管出口与浏览器验收。
+
+迁移、自动恢复与诊断脚本已整理到 [scripts/wsl-secure-egress/local-ops/](../scripts/wsl-secure-egress/local-ops/README.md)，索引含每个脚本的用途、是否改网络、前置条件与回退方式。
 
 本轮只新增文档，未改仓库源码；未记录凭据、私钥、控制器 secret 或完整订阅。
