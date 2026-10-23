@@ -1315,3 +1315,51 @@ WSL 启动时无条件**执行 `install_manager_after_boot_guard()`、`phase = '
 
 要让出网稳定，需要的是让 `Running` 状态在每次 WSL 启动后可靠重建，或明确接受
 "每次启动后手动 start"。这属于设计决策，未擅自实施。
+
+---
+
+## 2026-10-23 merge verification (main `f1fa1a0`)
+
+Environment: Windows 11, Python 3.12.10, PowerShell 5.1.26100.4652, cargo 1.98.0
+(Windows). Tree: merge of `fix/wsl-recovery-review-20261018` into `origin/main`
+`d537e05` (merge commit `ba00c29`), plus line-ending normalization `f1fa1a0`.
+These checks ran on the merged working tree before the merge commit; the tree
+content did not change afterwards.
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| `python -m compileall scripts/wsl-secure-egress` | PASS | Bytecode written outside the tree |
+| `linux_static_test.py` | PASS, 92 tests, 2 skipped | Origin/main version; includes root-only proof, boot-emergency and sysctl tests |
+| `acceptance_harness_unit.py` | PASS, 3 tests | Offline harness |
+| `server_unit.py` | PASS, 24 tests | Offline VPS profile validation |
+| `provision_unit.py` | PASS, 27 tests | Offline mocked host boundaries |
+| `payload_unit.py` | PASS, 32 tests, 16 skipped | Native root/flock cases skipped outside Linux root |
+| `tool-installer-static-unit.py` | PASS, 9 tests | Static installer checks |
+| `verify-build-unit.py` | PASS, 4 tests | Build-manifest checks |
+| `windows-unit.ps1` | PASS, 166 assertions | `network_tests=NOT_RUN`, `wsl_started=false`, `firewall_modified=false` |
+| `elevation-unit.ps1` | PASS, 21 assertions | `uac=NOT_RUN` |
+| `windows-workflow.ps1` | PASS, 255 assertions | Includes the merged distro-scope assertions; no firewall/task mutation |
+| `windows-automation.ps1` | PASS, 28 assertions | Offline automation checks |
+| `package-upgrade-unit.ps1` | PASS, 53 assertions | `services_modified=false` |
+| `restore-profile-unit.ps1` | PASS, 23 assertions | `hostWrites=false` |
+| `prepare-package-stage-unit.ps1` | PASS, 75 assertions | Temporary fixture; `hostWrites=false` |
+| `admin-job-acl.ps1` | PASS, 77 assertions | `elevationConsent=NOT_RUN` |
+| `clash-of-wsl/Test-ClashOfWsl.ps1` | PASS, 34 assertions | `live_tests=NOT_RUN` |
+| `cargo fmt --all -- --check` | PASS | Local Rust workspace |
+| `cargo test -p clash-client-core wsl::tests --locked --offline` | PASS, 28 passed, 137 filtered | Endpoint/state gate tests only |
+| `https://ipgw.neu.edu.cn/` | HTTP 302 | 2026-10-23, after merge and before commit |
+| `https://api.okinto.com/` | HTTP 200 | Same run |
+
+Conflict resolution applied in `ba00c29`:
+
+- `scripts/wsl-secure-egress/linux/manager.py`: took `origin/main`, which already
+  contains the shared-root proof, boot-emergency refusal and sysctl journaling,
+  plus the numeric-unreachable route improvement.
+- `scripts/wsl-secure-egress/tests/linux_static_test.py`: took `origin/main`
+  (superset of the local tests).
+- `docs/wsl-secure-egress/TEST_STATUS.md`: retained both sides in time order.
+
+Not executed in this verification: `linux_integration.py --execute-isolated`
+(needs Linux root / disposable namespaces), `windows-wfp.ps1 -ExecuteIsolated`
+(mutates WFP state), live acceptance and fail-closed acceptance (network
+mutation), and the desktop GUI suite.
