@@ -1,7 +1,7 @@
 # Ubuntu-22.04 空间清理方案（2026-10-23）
 
-> 本文件记录 Ubuntu-22.04 磁盘占用调查结果与清理方案。**所有步骤均未执行**，
-> 等待授权。调查全部为只读操作。
+> 本文件记录 Ubuntu-22.04 磁盘占用调查结果与清理方案。调查为只读；2026-10-24
+> 执行了 §8 所列步骤，原始方案保留用于追溯。
 
 ## 1. 背景与顺序约束
 
@@ -100,3 +100,42 @@ C:\Users\xuan\AppData\Local\Temp\wsl-egress-migration-20261023T\quarantine-uniqu
 - Ubuntu-26.04 迁移未执行（需管理员提权 + 停掉所有 WSL 发行版）。
 - fail-closed 验收、冷启动、主机重启、切换网络、Docker 受保护出口均未验证。
 - 未宣称任何端到端出口结论。
+
+## 8. 2026-10-24 执行记录
+
+前提确认：
+
+- Ubuntu-26.04 已接管 manager；Ubuntu-22.04 为普通发行版，保持运行。
+- 18 个 quarantine 独有文件已在提交 `5078347` 恢复到仓库；临时备份
+  `%TEMP%\wsl-egress-migration-20261023T\quarantine-unique-files\` 仍在（18/18）。
+- 未触碰 `/var/lib/cor-egress`、`/etc/cor-egress`、`/usr/local/lib/cor-egress`。
+
+| 项目 | 操作 | 回收 |
+| --- | --- | --- |
+| `/root/quarantine-root-repo-copy-20261018/target` | `rm -rf` | 约 17 GB |
+| systemd journal | `journalctl --vacuum-size=100M` | 696 MB |
+| apt cache archives | `apt-get clean` | 677 MB |
+| pip / fontconfig cache | 删除 `~/.cache/pip`、`~/.cache/fontconfig` | 约 123 MB |
+| camoufox 缓存 | 删除 `~/.cache/camoufox` | 2.5 GB |
+| rustup 工具链与 cargo | 删除 `~/.rustup`、`~/.cargo` | 1.7 GB + 21 MB |
+| llvm-14-dev | `apt-get purge -y llvm-14-dev` | 277 MB |
+
+保留：
+
+- `claude-desktop`（579 MB）：用户选择保留。
+- `llvm-14` / `clang-14`：`llvm-14-dev` 删除后仍安装；`/usr/lib/llvm-14` 剩余约 190 MB。
+- `quarantine` 仓库副本其余部分（约 47 MB）。
+- `/var/lib/cor-egress`、`/etc/cor-egress`、`/usr/local/lib/cor-egress`。
+
+结果：`/` 已用从 30 GB 降至约 6.6 GB，回收约 23.4 GB。
+
+清理后的联通性：
+
+- Windows 关键地址：`ipgw.neu.edu.cn` 302、`api.okinto.com` 200。
+- WSL 隧道当时为 `phase=blocked`、端点规则 `Enabled=False`，WireGuard 最后握手约
+  1 小时 13 分钟前。这是清理前已存在的 fail-closed 状态，删除项不涉及 cor-egress。
+  用户选择暂不恢复，保持关闭。
+- 因此本轮没有 WSL 出网验收；恢复需运行登录任务或产品 `Start`。
+
+未执行：`apt-get autoremove`（会移除其他自动安装依赖，未授权）、删除
+`claude-desktop`、恢复 WSL 隧道，以及既有的主机重启/网卡切换等未测项。

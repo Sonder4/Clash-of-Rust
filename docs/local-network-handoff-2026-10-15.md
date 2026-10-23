@@ -313,3 +313,22 @@ REA 语义覆盖 partial，6 个 unpacked 原生文件与 ASAR 声明哈希不�
 迁移、自动恢复与诊断脚本已整理到 [scripts/wsl-secure-egress/local-ops/](../scripts/wsl-secure-egress/local-ops/README.md)，索引含每个脚本的用途、是否改网络、前置条件与回退方式。
 
 本轮只新增文档，未改仓库源码；未记录凭据、私钥、控制器 secret 或完整订阅。
+
+## 24. Ubuntu-22.04 空间清理（2026-10-24）
+
+用户授权清理。执行前确认 Ubuntu-26.04 已接管 manager，Ubuntu-22.04 为普通发行版并保持运行；
+quarantine 的 18 个独有文件已在提交 `5078347` 恢复到仓库，临时备份仍在。
+
+已清理：`quarantine/target`（约 17 GB）、systemd journal vacuum（696 MB）、apt cache
+（677 MB）、pip/fontconfig 缓存（约 123 MB）、camoufox 缓存（2.5 GB）、rustup/cargo
+（1.7 GB + 21 MB）、llvm-14-dev（277 MB）。保留 `claude-desktop`（579 MB）、
+`llvm-14`/`clang-14`、`/var/lib/cor-egress`、`/etc/cor-egress`、
+`/usr/local/lib/cor-egress`。
+
+结果：`/` 已用从 30 GB 降至约 6.6 GB，回收约 23.4 GB。
+
+清理时发现 WSL 隧道为 `phase=blocked`、端点规则 `Enabled=False`、WireGuard 最后握手约
+1 小时 13 分钟前；这是清理前已存在的 fail-closed 状态，删除项不涉及 cor-egress。用户选择
+暂不恢复，保持关闭。Windows 关键地址 `ipgw.neu.edu.cn` 302、`api.okinto.com` 200 正常。
+恢复 WSL 出网需运行登录任务或产品 `Start`。详见
+[清理方案 §8](wsl-secure-egress/ubuntu22-cleanup-plan-2026-10-23.md#8-2026-10-24-执行记录)。

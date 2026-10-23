@@ -77,7 +77,7 @@ Clash of Rust 客户端与 **WSL Secure Egress / Clash of WSL** 分支工作。
 | [2026-10-23 26.04 迁移](wsl-secure-egress/UBUNTU26-MIGRATION-2026-10-23.md) | 迁移、六个根因、失败关闭与主机地址暴露面 | 现行 |
 | [2026-10-22 代码审查](wsl-secure-egress/CODE_REVIEW_2026-10-22.md) | 代码级审查记录 | 历史 |
 | [2026-10-18 PR #2 审查](wsl-secure-egress/PR_REVIEW_2026-10-18.md) | PR 审查与修复 | 历史 |
-| [2026-10-23 Ubuntu-22.04 清理方案](wsl-secure-egress/ubuntu22-cleanup-plan-2026-10-23.md) | 空间清理计划（未执行） | 待执行 |
+| [2026-10-23 Ubuntu-22.04 清理方案](wsl-secure-egress/ubuntu22-cleanup-plan-2026-10-23.md) | 空间清理方案与 2026-10-24 执行记录 | 现行（已执行） |
 
 ## 6. 本机网络、VPS 与 AI 域名专项
 

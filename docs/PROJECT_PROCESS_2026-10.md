@@ -311,7 +311,7 @@ cargo test -p clash-client-core wsl::tests --locked --offline
 
 ## 8. 当前状态（2026-10-23 晚）
 
-运行态（来自迁移记录的实测，本文整理时未重新验证）：
+运行态（迁移记录为 2026-10-23 实测；2026-10-24 清理时复核见末条）：
 
 - Ubuntu-26.04 为 manager，`phase=connected_unverified`，端点规则启用。
 - WireGuard 握手正常；WSL 出口为 VPS 德国 IPv4；DNS 正常。
@@ -319,6 +319,9 @@ cargo test -p clash-client-core wsl::tests --locked --offline
 - 登录计划任务 `ClashOfRust-WslEgress-Autostart` 已安装。
 - Clash `run_mode=rule` 已持久化；应用中内存模式可能仍需人工确认。
 - 失败关闭的 guard 语义保持；无 emergency 表。
+- **2026-10-24 清理时复核**：journal `phase=blocked`、`endpoint_enabled=false`，端点规则
+  `Enabled=False`，WireGuard 最后握手约 1 小时 13 分钟前；用户选择暂不恢复，保持
+  fail-closed。该状态在清理前已存在，删除项不涉及 cor-egress。
 
 仓库状态：
 
@@ -342,7 +345,9 @@ cargo test -p clash-client-core wsl::tests --locked --offline
 6. **`/mnt/c` 暴露面**：WSL 内以 9p 全盘可读；若其他可读文件含校园网地址，仍可被提取。
    完全消除需关闭 automount，代价是失去 Windows 文件访问。
 7. **Docker 受管出口未实现**：Docker Desktop 数据保留，但外部网络未适配、未验收。
-8. **Ubuntu-22.04 空间清理未开始**：`quarantine/target` 约 17.3 GB 等待确认删除。
+8. **Ubuntu-22.04 空间清理已完成（2026-10-24）**：`/` 已用从 30 GB 降至约 6.6 GB，
+   回收约 23.4 GB；保留 `claude-desktop`；详见
+   [清理方案](wsl-secure-egress/ubuntu22-cleanup-plan-2026-10-23.md) §8。
 9. **历史文档含真实地址**：若需脱敏，应单独处理并注意 Git 历史仍保留旧值。
 10. **未执行项**：主机重启、网卡切换、休眠恢复、WFP 隔离探测、live acceptance、
     fail-closed acceptance、浏览器/Claude Desktop 完整验收。
