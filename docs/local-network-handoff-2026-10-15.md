@@ -301,3 +301,13 @@ REA 语义覆盖 partial，6 个 unpacked 原生文件与 ASAR 声明哈希不�
 本轮只更新 GitHub fork 分支与本地源码仓库；没有安装/启动应用、编译、运行测试、改上游源码或更改活动网络配置。已存在的本地交接文档和配置仍保留；没有提交这些本地文件。仓库同步不代表已安装程序升级到 0.5.11。
 
 同步前的 fork 提交 `a1d1140` 仍可用于只读回看，例如在独立 worktree 检查；本轮未重写 fork 历史或执行回退。后续若需把 fork 分支恢复到旧提交，应先核对远端新状态并单独处理。
+
+## 23. Ubuntu-26.04 接管 WSL 出口（2026-10-23 晚）
+
+用户要求完成 Ubuntu-26.04 在 WSL 中的对外访问、确认不暴露本机 IP，并授权修改 Clash 配置。本轮已完成迁移并验证，详细记录见 [Ubuntu-26.04 迁移、根因与验证](wsl-secure-egress/UBUNTU26-MIGRATION-2026-10-23.md)。
+
+结果概要：Ubuntu-26.04 已成为 manager，WireGuard 握手正常，WSL 出口实测为 VPS `62.84.164.122`；Hyper-V 对 WSL 默认拒绝，唯一放行 `UDP 51820 → 62.84.164.122`；Clash `run_mode` 持久化为 `rule`（备份在 `%TEMP%\wsl-egress-migration-20261023T\clash-settings.before.json`）；新增登录计划任务 `ClashOfRust-WslEgress-Autostart`，在登录后 30 秒自动恢复隧道，已用两次 `wsl --shutdown` 实测。
+
+重要边界：产品本身不自动建立隧道（boot hook 只恢复默认拒绝）；`wsl --shutdown` 无登录事件，需手动运行该任务或执行产品 Start；Ubuntu-22.04 必须保持运行，否则刷新任务会在 60 秒内关闭端点；主机冷启动尚未实测。两个发行版的旧 payload 与 journal 备份在各自 `/root/cor-egress-stale/`。未执行 fail-closed 隔离断连测试、逐跳定位、主机重启、网卡切换、Docker 受管出口与浏览器验收。
+
+本轮只新增文档，未改仓库源码；未记录凭据、私钥、控制器 secret 或完整订阅。
