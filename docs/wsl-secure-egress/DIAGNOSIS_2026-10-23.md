@@ -149,3 +149,90 @@ WSL → `172.19.96.1:<port>` 超时，因为 Hyper-V 防火墙
 
 **本轮没有任何一步证明 WSL 端到端出口。** 当前状态应描述为：静态与离线验证通过、
 隔离数据面通过、Windows 边界丢包点已收缩但未定位、运行态 fail-closed 生效。
+
+## 9. Ubuntu-26.04 manager 迁移（2026-10-23 执行记录）
+
+目标：把 WSL Secure Egress 的 manager 从 Ubuntu-22.04 换成 Ubuntu-26.04，
+并使 WSL 重启后隧道自动恢复。
+
+### 9.1 事实核查（已证实）
+
+| 结论 | 证据 |
+| --- | --- |
+| profile 私钥与 22.04 现有 `wireguard.key` 逐字节相同 | sha256 前 20 位 `ffeb368f1e8401ae8d5e` 两侧一致 |
+| 隧道地址 `10.77.0.2/32` 就是 VPS 上唯一已授权 peer | 与 profile `tunnel_address` 一致 |
+| **迁移不需要改 VPS** | 由上面两条推出 |
+| WSL2 是单 VM 共享内核 | 三个发行版都解析到同一个 `net:[4026531833]` |
+| 已装 EXE 与其嵌入 payload 哈希不一致 | 13/16 个 blob 与磁盘一致；`WslSecureEgress.psm1`、`linux/manager.py`、`linux/CONTRACT.md` 三个 blob 在磁盘和所有 git 版本里都不存在 |
+| 该不一致是版本滞后而非篡改 | 磁盘资源比 EXE 新；EXE 是官方安装包产物 |
+
+结论：GUI 的 `payload::verify()` 在应用重新编译前**不可能通过**，因此 GUI 的
+UAC 通道不可用，只能直接调用已安装包内的脚本。直接调用本身工作正常。
+（另有两份安装：主包 `C:\Program Files\Clash of Rust\...` 与辅助包
+`C:\Program Files\Clash of Rust WSL\...`，内容有分歧，是后续多个问题的根源。）
+
+### 9.2 run 1：卡死
+
+按顺序执行到 `04-rollback` 成功（`outcome=succeeded`，`phase=restored`）后，
+进程永久冻结：CPU 停在 19.3 秒不再增长，2.0 GB RSS，7 个线程处于
+`UserRequest` 等待，没有子进程，`05-install.json` 始终没出现。
+该进程是管理员进程，本会话（非管理员）无法结束；`taskkill /F` 的 UAC
+提示被取消。它当前是无害的残留：模块的
+`Global\ClashOfRust.WslEgress.Operation` 互斥体不存在，即使它醒过来也会被
+模块自身的并发保护拒绝，而不是与新 Install 竞争。
+
+卡死前的实际战果：
+
+    00-baseline   ipgw=302  okinto=200
+    01-snapshot   295 MB（序列化缺陷，见 9.3）
+    02-stop       被 resume 检查跳过（已是 installed_closed）
+    03-shutdown   wsl --shutdown，无发行版在跑
+    04-rollback   outcome=succeeded  phase=restored
+
+宿主此后一直处于"已回滚"的安全状态：journal `restored`、`endpoint_enabled=false`、
+三个发行版全部 Stopped、两个强制地址 302/200 正常。
+
+### 9.3 定位到的三个缺陷（均已单独复现验证）
+
+**缺陷 1：快照序列化爆炸。** `ConvertTo-Json -Depth 6` 作用在"值为原始文件
+文本"的哈希表上时，会递归遍历字符串本身。本机实测：
+
+    stateJson only, Depth 1:      3,841 bytes
+    stateJson only, Depth 2:      4,400
+    stateJson only, Depth 3:     28,567
+    stateJson only, Depth 4:    384,604
+    stateJson only, Depth 5:  2,222,751
+    stateJson only, Depth 6: 46,352,501
+
+一个 3.3 KB 的文件在 Depth 6 下变成 46 MB；四个字段合起来就是
+295,339,235 字节的 `01-snapshot.json`。
+
+修法：每段文本单独过 `ConvertTo-Json -Depth 1`（单个字符串不会递归），再拼接。
+结果 4,704 字节，`ConvertFrom-Json` 往返成功，`stateJson.Length` 仍是 3295。
+顺带修掉一个隐藏问题：空数组过 `ConvertTo-Json` 返回 `$null`，字符串拼接后
+变成 `"hyperv":}`，是非法 JSON；现在空数组固定输出 `[]`。
+
+**缺陷 2：任何步骤都没有超时。** run 1 因此挂了 50 分钟无人察觉。现在每步都
+用 `Start-Process` + 文件重定向 + `WaitForExit(超时)`，超时就杀掉并报告。
+
+**缺陷 3：进度只靠 `Start-Transcript` 记录。** run 1 的 transcript 在 12:15:45
+之后就不再更新，而 `04-rollback.json` 是 12:16 落的盘，说明 transcript 丢了
+最后的进度。换成逐行 append + flush。
+
+### 9.4 run 2：已就绪但未执行
+
+`migrate-26-run2.ps1` 已写好并通过语法检查与非提权 plan-only 演练：
+快照 4,704 字节、全程约 2 秒、日志逐行落盘。
+正式执行需要一次 UAC 提权，该提权提示两次均被取消，因此 run 2 尚未运行，
+系统状态与 run 1 结束时一致（安全、未变更）。
+
+**迁移仍未完成。** 在 run 2 成功之前，不得认为 Ubuntu-26.04 已接管 manager，
+也不得认为"WSL 重启后自动恢复"已经实现。
+
+### 9.5 已识别但未处理的风险
+
+| 项 | 说明 |
+| --- | --- |
+| 计划任务身份校验 | `Test-WslEgressRenewalTaskIdentity` 用 `$PSScriptRoot` 拼出期望参数，而旧任务指向辅助包路径，两边必然不符。已手动删除该过期任务（XML 已备份到 `migration/renewal-task-backup.xml`），Install/Start 会按主包重新注册 |
+| `dnsTunneling=true` | 当前 `.wslconfig` 的 `dnsTunneling=true` 是 10-18 快照的既有状态，不是本轮改动；但产品要求 `false`，`Get-WslEgressWindowsConfigAudit` 会判 `valid=false` |
+| Ubuntu-22.04 清理 | 尚未开始，属单独授权项 |
