@@ -108,4 +108,4 @@ try {
     # Exception text may contain private paths or configuration. Never echo it raw.
     Write-ToolResult 'failed' 'Clash of WSL could not complete the action; see the protected journal and log.'
     exit 1
-}
+}

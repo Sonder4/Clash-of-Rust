@@ -106,4 +106,4 @@ try {
 } catch {
     Write-DaemonLog ('daemon failed: ' + $_.Exception.Message)
     exit 1
-}
+}
