@@ -70,6 +70,7 @@ jobs:
             './scripts/wsl-secure-egress/tests/restore-profile-unit.ps1',
             './scripts/wsl-secure-egress/tests/prepare-package-stage-unit.ps1',
             './scripts/wsl-secure-egress/tests/windows-workflow.ps1',
+            './scripts/wsl-secure-egress/tests/windows-automation.ps1',
             './scripts/wsl-secure-egress/tests/package-upgrade-unit.ps1'
           )) {
             & $powershell -NoLogo -NoProfile -NonInteractive -File $test

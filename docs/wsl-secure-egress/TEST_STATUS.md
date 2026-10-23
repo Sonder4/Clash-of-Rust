@@ -1041,3 +1041,277 @@ visible, while endpoint/profile inputs, logs and recovery actions are under
 **高级**. The native pointer regression was rerun after this layout change;
 its result is recorded in the commit validation rather than inferred from an
 earlier build.
+## 2026-10-23 diagnostic checkpoint and offline verification (current session)
+
+This entry records only commands actually executed in this session. The live
+tunnel remained down throughout; nothing below proves end-to-end WSL egress.
+The corrected diagnosis is in `DIAGNOSIS_2026-10-23.md`.
+
+### Git checkpoint
+
+| Operation | Result | Evidence |
+| --- | --- | --- |
+| Commit A: product changes | PASS | `095567c`, 3 files, 229 insertions, 10 deletions |
+| Commit B: review document | PASS | `9de3edd`, `CODE_REVIEW_2026-10-22.md`, 240 lines |
+| Whitespace check before each commit | PASS | `git diff --check` |
+| Generated artifacts staged | NONE | No `dist/`, `target/` or `node_modules/` |
+
+Off-repo runtime snapshot saved to
+`%LOCALAPPDATA%\Temp\wsl-diag-snapshot-20261023\` (nft rulesets for three
+namespaces, `wg show`, Hyper-V rules for both stores, Windows routes, journal
+files). Not committed; contains operational state.
+
+### Critical address baseline
+
+| Address | Result | Time |
+| --- | --- | --- |
+| `https://ipgw.neu.edu.cn/` | HTTP 302, 0.025 s | 2026-10-23 00:47:29 |
+| `https://api.okinto.com/` | HTTP 200, 0.908 s | 2026-10-23 00:47:29 |
+
+### Offline checks executed
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| `linux_static_test.py` | PASS, 84 tests, 2 skipped | Portable gate logic; no kernel operations |
+| `acceptance_harness_unit.py` | PASS, 3 tests | Offline harness |
+| `server_unit.py` | PASS, 24 tests | Offline VPS profile validation |
+| `provision_unit.py` | PASS, 26 tests | Offline mocked host boundaries |
+| `payload_unit.py` | PASS, 32 tests, 16 skipped | Sandbox payload validation |
+| `python3 -m compileall` | PASS | Syntax only |
+| Shell entry syntax (`sh -n`) | PASS, 3 files | `manager`, `secure-egress`, `cor-egress-manager` |
+| `windows-unit.ps1` | PASS, 165 assertions | Mocked; `network_tests=NOT_RUN`, `wsl_started=false`, `firewall_modified=false` |
+| `elevation-unit.ps1` | PASS, 21 assertions | Offline; `uac=NOT_RUN` |
+| `windows-workflow.ps1` | PASS, 248 assertions | Offline; `firewall_modified=false`, `scheduled_tasks_modified=false` |
+| `package-upgrade-unit.ps1` | PASS, 53 assertions | Offline; `services_modified=false` |
+| `cargo build --workspace --locked --offline` | PASS, 0 errors | 1 pre-existing linker warning (not an error) |
+| `cargo test -p clash-client-core wsl::tests` | PASS, 27 passed, 136 filtered out | Endpoint-only Install/Start requires a profile |
+| `cargo fmt --all -- --check` | PASS | Local Rust workspace |
+| `cargo clippy -p clash-client-core --all-targets -- -D warnings` | PASS | No issues |
+
+### Isolated Linux data-plane verification
+
+`CI=true COR_EGRESS_ISOLATED_CI=1 python3
+scripts/wsl-secure-egress/tests/linux_integration.py --execute-isolated`:
+
+| Case group | Result |
+| --- | --- |
+| Overall | PASS, 86 cases, all PASS |
+| `kernel-rules-closed` / `-open-single` / `-open-multiple-bridge` | PASS |
+| `managed-tcp` / `managed-udp` / `managed-dns-tcp` / `managed-dns-udp` | PASS, receipt `source=10.77.0.2` |
+| `install-blocks-existing-tcp`, `installed-*` deny cases | PASS, `received=0` |
+| `attestation-*` (expired, future, generation, unmanaged distro, effective audit, permissions) | PASS |
+| `bwrap-permissions-and-mounts` / `bwrap-host-stdio-refused` | PASS, capabilities 0, noNewPrivs |
+| `stop-blocks-*`, `missing-tunnel-*`, `stopped-*` | PASS, `received=0` |
+| `restart-managed-tcp` / `restart-managed-udp` | PASS, tunnel receipt |
+| `post-rollback-*` (tcp, udp, ipv6, dns) | PASS |
+| Scope declared by the suite | `disposable Linux netns only; not WSL/Windows/real VPS acceptance` |
+
+Dependencies verified present before the run: `unshare`, `mount`, `ip`, `nft`,
+`wg`, `bwrap`, `setpriv`, `sysctl`.
+
+**This run overturns an earlier hypothesis.** The isolated fixture uses the same
+`manager.py start()` path, the same create-in-transport-then-move-to-gateway
+namespace layout, and the same absence of an `fwmark`, yet its tunnel passes.
+Missing `fwmark` is therefore not the cause of the production outage. See
+`DIAGNOSIS_2026-10-23.md` §3.
+
+### Not executed
+
+| Check | Status | Required environment |
+| --- | --- | --- |
+| `live_acceptance.py --execute` | BLOCKED | Requires a running phase with the endpoint enabled; the journal is `blocked` |
+| `fail-closed` acceptance | NOT_RUN | Closes the endpoint; separate authorization |
+| Windows-side packet capture to locate the exact drop | NOT_RUN | `pktmon` and similar change system state |
+| Cold boot, reboot, sleep/resume, network switch | NOT_RUN | Disposable WSL/Hyper-V environment |
+| Actual German IPv4 exit and receiver-source evidence | NOT_RUN | Authorized VPS and controlled receiver |
+| Docker functional protected egress | NOT_SUPPORTED | Independent adapter not implemented |
+| Ubuntu-26.04 runtime acceptance | NOT_RUN | Only Ubuntu-22.04 was exercised |
+
+### System change made this session
+
+| Change | State | Rollback |
+| --- | --- | --- |
+| `ClashOfRust-WslEgress-Endpoint` Hyper-V rule enabled in both stores | Applied; did not restore the tunnel | Set `Enabled=False` again; scope unchanged (UDP 51820 to the journaled endpoint only) |
+
+All other diagnostics were read-only. No Clash/Mihomo restart, no `.wslconfig`
+change, no Hyper-V default-policy change, no WSL restart, no firewall rule
+deletion, and no Claude/Anthropic access.
+
+### Status statement
+
+Static, offline and isolated data-plane checks pass. The live WSL tunnel remains
+down with the endpoint disabled and fail-closed in force. The drop point is
+narrowed to the Windows side of the WSL boundary but is not located. No
+end-to-end WSL egress, exit location or zero-leak claim is made.
+
+---
+
+## 2026-10-23 WSL 出网恢复与 Ubuntu-26.04 核查（后续会话）
+
+前提：用户明确授权验证性测试、构建，并要求以 Git 保存状态、做好文档记录。
+用户随后明确判断故障根因为「此前无法将数据传输到 VPS 是被 clash of rust 截流了」，
+并要求「ubuntu26 以及 22 必须要正常连接到 VPS 并且访问外网」。
+
+### 根因确认
+
+用户判断得到实测证实。`Find-NetRoute` 显示到 VPS v4/v6 的路由均经 `Meta` TUN 适配器
+（metric 0）；WSL 侧 `tcpdump` 证明封装包已正常离开 WSL（`eth0` 上
+`172.19.104.128.51821 > 62.84.164.122.51820`，SNAT 已应用），但 VPS 侧
+`cor-wsl0` RX 不增长、`latest-handshakes` 冻结。丢包点收敛到 Windows 侧 TUN 边界。
+
+此前诊断中「GW 命名空间缺少 fwmark / `ip rule` bypass」的判断已被隔离集成测试
+推翻（同一代码路径、同样无 fwmark，隧道通过），本次进一步确认它不是本故障成因。
+
+### 已生效的改动
+
+| 对象 | 改动 | 说明 |
+| --- | --- | --- |
+| `profiles/28b1ea79-….yaml`（活动订阅） | 在顶层 `rules` 顶部插入 `- IP-CIDR,62.84.164.122/32,DIRECT` 及三行注释 | 经应用自身机制落盘；**不改上游应用源码、不装第二份客户端** |
+| 运行核心 | 重启后由应用从上述 profile 重新生成 `config.yaml`，规则生效 | `/rules` 返回 6 条，`IPCIDR 62.84.164.122/32 -> DIRECT` 位于 `MATCH` 之前 |
+
+关键机制结论（读 `apps/desktop/src/engine/mod.rs` 得到）：
+
+- `start_core()` 每次启动都用 `atomic_write` 从**活动 profile** 重新生成
+  `runtime/config.yaml`。手改 `config.yaml` 会被下次启动覆盖，必须改 profile。
+- `candidate.yaml` 只是 `validate_in()` 跑 `mihomo -t` 用的临时文件，不会被复制回
+  `config.yaml`。此前「应用可能用它覆盖 config.yaml」的担心不成立。
+- 控制器 reload 的实际契约是 `PUT /configs?force=true` + body `{"payload": "<完整 YAML>"}`；
+  早前 `{"path":…}` 形式的尝试被拒（`Body invalid`）是请求格式错误，不是权限问题。
+
+备份（均在仓库外临时区，未入库）：`clash-config-backup-20261023.yaml`（原 config.yaml，
+3488 B）、`clash-profile-backup-20261023.yaml`（原 profile）、
+`clash-settings-backup-20261023.json`（原 settings.json）。
+
+### 验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `mihomo -t` 校验改动后的 profile | 通过（exit 0，`test is successful`） |
+| 重启后 `/rules` | 6 条，VPS 直连规则在最前 |
+| `ipgw.neu.edu.cn` | HTTP 302（重启后复验） |
+| `api.okinto.com` | HTTP 200（重启后复验） |
+| WSL `wg0` latest handshake | **恢复更新**（此前冻结 2 小时以上） |
+| WSL 隧道内出口 IP | `62.84.164.122`（VPS 德国 IPv4） |
+| WSL 隧道内 DNS | `dns.google` 返回 `Status:0` 与 A 记录，解析正常 |
+| WSL 通用外网 | `https://example.com/` HTTP 200 |
+| nft guard `cor_egress_guard` | 仍为 `policy drop`，fail-closed 语义未被破坏 |
+
+### Ubuntu-26.04 核查结论（重要）
+
+Ubuntu-26.04 的 payload **已完整安装且正确**，此前判断有误：
+
+- `/usr/local/lib/cor-egress/` 四个文件哈希与 `payload-receipt.json` 完全一致。
+- `deploy.json` 记录 `payload_Ubuntu-26.04: ok`、`payload_Ubuntu-22.04: ok`。
+- `/etc/wsl.conf` 已含 `[boot] command = /usr/local/lib/cor-egress/manager guard`。
+
+之前得出「未安装」的结论是因为 Git Bash 把 WSL 内绝对路径转换成 `D:/Git/...`，
+`find`/`cat` 全部落空；加 `MSYS_NO_PATHCONV=1` 后即可正确访问。
+
+两者真实差异在状态深度：
+
+| | Ubuntu-22.04 | Ubuntu-26.04 |
+| --- | --- | --- |
+| `/var/lib/cor-egress/state.json` phase | `Guarded` | `DistroConfigured` |
+| `/etc/cor-egress/profile.json` | 有（含 endpoint、tunnel 10.77.0.2/32、resolver 10.77.0.1） | **无** |
+| `/var/lib/cor-egress/scope-attestation.json` | 有 | **无** |
+| `/var/lib/cor-egress/wireguard.key` | 有 | **无** |
+| 隧道 | 通 | 未建立 |
+
+VPS 侧 `cor-wsl0` 当前只有一个 peer（`allowed ips: 10.77.0.2/32`，即 22.04）。
+**同一 peer 与同一 tunnel IP 不能同时服务两个发行版。** 让 26.04 也连上 VPS 需要：
+新密钥对、VPS 侧新增 peer、分配新 tunnel IP（如 10.77.0.3/32），
+这属于修改 VPS 服务器配置，超出本轮「配置 26.04」的范围，未执行。
+
+因此用户要求「ubuntu26 以及 22 必须要正常连接到 VPS 并且访问外网」目前
+**只对 Ubuntu-22.04 成立**；Ubuntu-26.04 尚未连通，阻塞原因是需要 VPS 侧新增 peer，
+且该步骤需单独授权。
+
+### 顺带发现（与本任务相关但未改）
+
+SSH alias `ciallo` 在 `~/.ssh/config` 中硬编码 `HostName 2401:1da0:22:f7::a` 且
+`AddressFamily inet6`。该 IPv6 地址的默认路由经 `Meta` TUN（ifIndex 64），
+TCP 22 虽可连通但握手被关闭；改用 IPv4 + 同一密钥可正常登录并读取 VPS 状态。
+这与 WSL 故障同源（VPS 地址被 TUN 捕获），但**未给 IPv6 地址添加直连规则**，
+因为改动影响面大于本轮范围。
+
+### 未完成项
+
+| 项 | 状态 | 阻塞原因 |
+| --- | --- | --- |
+| Ubuntu-26.04 连接 VPS | NOT_RUN | 需 VPS 侧新增 peer + 新 tunnel IP，属服务器配置，需单独授权 |
+| VPS IPv6 直连规则 | NOT_RUN | 影响面待评估 |
+| fail-closed 验收 | NOT_RUN | 会关闭 endpoint，属独立授权项 |
+| Windows 侧丢包逐跳定位 | NOT_RUN | 需 pktmon 等改变系统状态的手段 |
+| 冷启动、重启、睡眠恢复、切网 | NOT_RUN | 需隔离环境 |
+| Docker 受保护出口 | NOT_SUPPORTED | 独立适配器未实现 |
+
+### 状态陈述
+
+Ubuntu-22.04 已端到端打通：WSL 流量经 Clash of Rust 直连规则出到 VPS 德国 IPv4，
+DNS 经隧道解析，guard 的 fail-closed 语义保持。**这只是单发行版、单路径的实测结果，
+不构成「任何时候、任何网络零泄漏」的结论。** Ubuntu-26.04 尚未连通。
+
+---
+
+## 2026-10-23 追加：`Guarded` 是常态，`Running` 需每次启动后重建
+
+本节修正上一节"Ubuntu-22.04 已端到端打通"的表述。那一次通过是真实的，但它不是一个
+持久状态；大约 30 分钟后同一条路径失效，复测发现丢包点，并定位到机制性原因。
+
+### 失效时的测量
+
+| 测量 | 结果 |
+| --- | --- |
+| WSL 内 `wg0` transfer | 两次采样完全相同，不再增长 |
+| transport 命名空间 `cor-ut0` 抓包 | keepalive 每 5 秒正常发出（148 B） |
+| 根命名空间 `cor-et0` 抓包 | 同样的包到达（3 包 / 12 秒） |
+| 根命名空间 `eth0` 抓包 | **0 包** |
+| 根命名空间 `conntrack` | 无任何到 62.84.164.122 的 UDP 条目 |
+| Windows vNIC（`vEthernet (WSL …)`） | 收发 delta 均为 +0 |
+| VPS 侧 `cor-wsl0` | received 不变，handshake 24 分钟前 |
+| 根命名空间 nft `forward` 链 | `policy drop`，**无任何 accept 规则**，计数器 10 秒 +2 包 |
+
+丢包点因此精确定位在**根命名空间 `cor-et0` → `eth0` 的转发路径**，且是 nftables
+`forward` 链主动丢弃，不是路由错误：`ip route get 62.84.164.122 from 169.254.240.2
+iif cor-et0` 正确解析为 `via 172.19.96.1 dev eth0`。
+
+### 机制原因
+
+`manager.py` 的根命名空间 guard 表有两种形状：
+
+- `root_rules()`（`opened=False`）：forward 链只有 `policy drop`，**无 accept**；
+- `root_rules(opened=True)`：forward 链含
+  `iifname "cor-et0" oifname "<uplink>" ip saddr 169.254.240.2 ip daddr <endpoint>
+  udp sport 51821 udp dport 51820 accept`（约 1208 行），并配套 SNAT masquerade。
+
+`start()` 在约 1807 行写入 `opened=True` 后才把 phase 置为 `Running`。
+而 `boot_guard()`（约 1926 行，即 `/etc/wsl.conf` 的 `[boot] command`）在**每次
+WSL 启动时无条件**执行 `install_manager_after_boot_guard()`、`phase = 'Guarded'`，
+装回 `opened=False` 的 deny 表。
+
+`/var/lib/cor-egress/state.json` 显示 `phase: Guarded`，`previous_boots` 有 173 条
+且全部是 `Guarded`——**该 journal 从未达到 `Running`**。同时 `namespaces` 已建立、
+`sysctls` 已写 9 项，说明 30 分钟前那次 start 走到了命名空间与 sysctl，但 phase 未落
+`Running`，随后 guard 把表覆盖回 deny 形状。
+
+因此：
+
+- 上一节记录的"出口 62.84.164.122 / DNS 解析 / example.com 200"是**一次真实的瞬时测量**，
+  但它依赖 `opened=True` 表恰好还在，不是一个可持久复现的状态；
+- `Guarded` 是 WSL 每次启动后的**设计常态**，`Running` 需要 Windows 侧 attestation
+  通过后重新 start，且下一次 WSL 启动又会回到 `Guarded`；
+- 这不是本轮新引入的缺陷，而是"每次启动后必须重新 start"这一设计与
+  `boot_guard` 无条件回落之间的既定行为。本机 journal 的 `phase: blocked`
+  （Windows 侧）还会让 `Invoke-WslEgressScopeRenewal` 在函数开头直接返回，
+  不会自动续期。
+
+### 结论修正
+
+不得把上一节表述为"WSL 已端到端打通"。准确表述是：
+
+> 静态、离线与隔离数据面验证通过；直连规则已生效并被核心确认；曾有一次瞬时端到端
+> 测量通过（出口 VPS 德国 IPv4），但该状态不可持久，当前根命名空间 guard 处于
+> `Guarded`（deny）形状，WSL 出网再次中断。fail-closed 语义始终成立。
+
+要让出网稳定，需要的是让 `Running` 状态在每次 WSL 启动后可靠重建，或明确接受
+"每次启动后手动 start"。这属于设计决策，未擅自实施。

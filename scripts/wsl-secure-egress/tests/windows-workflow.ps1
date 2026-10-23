@@ -505,17 +505,37 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     foreach ($name in @('Ubuntu', 'Debian', 'Fedora', 'Arch')) {
         Assert-Equal @($script:Calls | Where-Object { $_ -eq ('install-payload:' + $name) }).Count 1 "fresh install stages exactly one payload for $name"
     }
+    $payloadDistros = @($script:Calls |
+        Where-Object { $_ -like 'install-payload:*' } |
+        ForEach-Object { $_.Substring('install-payload:'.Length) } |
+        Sort-Object) -join ','
+    Assert-Equal $payloadDistros 'Arch,Debian,Fedora,Ubuntu' 'fresh install stages payload for exactly the managed distributions'
     foreach ($name in @('Debian', 'Fedora', 'Arch')) {
         Assert-Equal @($script:Calls | Where-Object { $_ -eq ('linux:configure:' + $name) }).Count 1 "fresh install configures exactly once: $name"
     }
     Assert-Equal @($script:Calls | Where-Object { $_ -eq 'linux:configure:Ubuntu' }).Count 0 'manager is not configured as a sibling'
+    $configuredDistros = @($script:Calls |
+        Where-Object { $_ -like 'linux:configure:*' } |
+        ForEach-Object { $_.Substring('linux:configure:'.Length) } |
+        Sort-Object) -join ','
+    Assert-Equal $configuredDistros 'Arch,Debian,Fedora' 'fresh install configures exactly the ordinary sibling distributions'
     foreach ($name in @('Ubuntu', 'Debian', 'Fedora', 'Arch')) {
         Assert-Equal @($script:Calls | Where-Object { $_ -eq ('stop-distro:' + $name) }).Count 1 "fresh install stops exactly once: $name"
     }
+    $stoppedDistros = @($script:Calls |
+        Where-Object { $_ -like 'stop-distro:*' } |
+        ForEach-Object { $_.Substring('stop-distro:'.Length) } |
+        Sort-Object) -join ','
+    Assert-Equal $stoppedDistros 'Arch,Debian,Fedora,Ubuntu' 'fresh install stops exactly the managed distributions'
     Assert-Equal @($script:Calls | Where-Object { $_ -eq 'linux:audit-config:' }).Count 1 'fresh install audits the manager exactly once'
     foreach ($name in @('Debian', 'Fedora', 'Arch')) {
         Assert-Equal @($script:Calls | Where-Object { $_ -eq ('linux:audit-config:' + $name) }).Count 1 "fresh install audits exactly once: $name"
     }
+    $auditedDistros = @($script:Calls |
+        Where-Object { $_ -like 'linux:audit-config:*' -and $_ -ne 'linux:audit-config:' } |
+        ForEach-Object { $_.Substring('linux:audit-config:'.Length) } |
+        Sort-Object) -join ','
+    Assert-Equal $auditedDistros 'Arch,Debian,Fedora' 'fresh install audits exactly the ordinary sibling distributions'
     Assert-Equal @($script:Calls | Where-Object { $_ -eq 'process:--shutdown' }).Count 1 'fresh install performs one shared WSL restart'
     Set-Item -LiteralPath Function:script:Get-WslEgressDistributions -Value $distributionFixtureImplementation
 

@@ -87,6 +87,20 @@ The current user request is captured in three change records:
   defines the fixed Windows-to-Linux API.
 - [Implementation plan](../wsl-secure-egress-plan.md) preserves the accepted
   design and acceptance gates.
+- [Local operations](../../scripts/wsl-secure-egress/local-ops/README.md) indexes
+  this machine's migration, autostart and diagnostic scripts. They are local
+  tools, not part of the installed product, and every network-mutating one
+  requires the mandatory connectivity baseline first.
+
+### Local run records
+
+These files record actual runs on this machine. They are not product
+acceptance evidence and do not replace [TEST_STATUS.md](TEST_STATUS.md).
+
+- [2026-10-22 code review](CODE_REVIEW_2026-10-22.md)
+- [2026-10-23 runtime diagnosis](DIAGNOSIS_2026-10-23.md)
+- [2026-10-23 Ubuntu-26.04 migration](UBUNTU26-MIGRATION-2026-10-23.md)
+- [2026-10-23 Ubuntu-22.04 cleanup plan](ubuntu22-cleanup-plan-2026-10-23.md)
 
 ## Trusted resources
 
