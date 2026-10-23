@@ -124,8 +124,8 @@ guard、profile 或 Hyper-V 策略，也不绕过 `Start` 的内部审计。
    仍是 `global`；若应用在退出或设置变更时回写，可能退回。建议在应用界面确认模式显示为"规则"。
 5. **自动恢复脚本依赖产品私有函数**（`Read-WslEgressState`、`Invoke-WslEgressLinux`、
    `Get-WslEgressDistributions`）。产品升级改变模块内部结构时脚本会失效，升级后需复验。
-6. **本轮未做的验收**：fail-closed 隔离断连测试、逐跳丢包定位、主机重启、网卡切换、Docker 受管
-   出口、`/mnt/c` 隐藏、Chrome/Claude Desktop 启动与登录。
+6. **本轮未做的验收**：主机重启、网卡切换、Docker 受管出口、`/mnt/c` 隐藏、Chrome/Claude Desktop
+   启动与登录。（失败关闭与主机地址暴露面已在 §8 实测。）
 
 ## 7. 回退
 
@@ -139,3 +139,51 @@ guard、profile 或 Hyper-V 策略，也不绕过 `Start` 的内部审计。
 5. **恢复 journal 修复前状态**：`run3/02-journal-before-repair.json`。
 
 回退顺序应为 3 → 4（先让产品自己收尾，再恢复被移走的旧代文件），不要反向覆盖。
+
+## 8. 主机地址暴露面与失败关闭实测（2026-10-23 21:00–21:18）
+
+测试目标地址：`172.22.94.221`（主机 WLAN）、`172.20.252.161`（主机另一适配器）、
+`210.30.194.221`（校园网公网出口，VPS 侧看到的 WireGuard peer 源地址）。
+
+### 8.1 WSL 内能否直接获得 Windows 的校园网地址
+
+| 途径 | 结果 |
+| --- | --- |
+| `ip addr/route/neigh`、`hostname -I` | 只有 `172.19.104.128`、`169.254.240.1`、`169.254.241.1` |
+| `/etc/resolv.conf` | 只有 `10.77.0.1` |
+| `/proc/net/route`、`/proc/net/fib_trie` | 只有 WSL NAT 与两个内部 veth |
+| 代理环境变量 | 空 |
+| `/mnt/wsl/resolv.conf` | `172.19.96.1`（主机侧 WSL 适配器地址，非校园网地址） |
+| `/mnt/c/.../ipconfig.exe` | `Exec format error`（interop 已禁用，无法执行 Windows 二进制） |
+| `grep` `/etc` `/run` `/var/log` | 三个前缀均无命中 |
+| 注册表 hive `SYSTEM`、`SOFTWARE` | 不可读（权限拒绝） |
+| 递归扫描 `/mnt/c/Users/xuan` | 三个前缀均无命中 |
+
+结论：网络/系统命令面无法获得主机校园网地址；注册表与用户目录未发现明文。
+
+残余面：`/mnt/c` 以 9p drvfs 全盘可读（`uid=1000`）。若其他可读文件（日志、二进制、缓存、
+应用数据）含该地址，仍可被 grep 提取；上表的"无命中"是抽样与有限扫描，不是不可能性证明。
+要完全消除这一类，需要关闭 automount（`[automount] enabled=false`），代价是 WSL 失去
+Windows 文件访问，且产品安装阶段的 `/mnt/c` profile 路径需要另行处理。本轮未执行该变更。
+
+### 8.2 隧道或 guard 不正常时的失败关闭
+
+| 场景 | `http://1.1.1.1` | DNS | ICMP | VPS TCP 443 |
+| --- | --- | --- | --- | --- |
+| 正常关闭（关闭 guard 表 + 端点禁用） | `000` | 失败 | 失败 | — |
+| **guard 表被整体删除** + 端点禁用 | `000` | 失败 | 失败 | — |
+| **guard 表被删除** + 端点临时启用 | `000` | — | — | 被拒绝 |
+| WSL 重启后未 Start | 无出口 | 无 | 无 | — |
+
+要点：
+
+- Hyper-V 默认拒绝是**独立的第二层**。即使 WSL 内的 nft 表被完全清空，WSL 仍无外网出口。
+- 端点规则作用域精确：即使启用，也只允许 `UDP 51820 → 62.84.164.122`；同一地址的 TCP 443
+  仍被拒绝，公网地址一律拒绝。
+- 恢复路径实测：删除 guard 表后执行 boot hook
+  `/usr/local/lib/cor-egress/manager guard` 能重建 guard（`outcome=succeeded`、`phase=Guarded`）；
+  登录任务或产品 `Start` 能重开隧道，出口恢复 `62.84.164.122`。
+
+未测（结构性判断，未实证）：停 Clash 核心（TUN 消失后 WireGuard 外层包改走直连，隧道本身
+不依赖 Clash）、VPS 侧 WireGuard 停服（打开的 guard 只把包送进 wg0，无握手即丢弃）。主机重启
+与网卡切换仍未测。
