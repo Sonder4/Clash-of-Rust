@@ -1,0 +1,1568 @@
+{
+  "schema_version": 1,
+  "inventory_date": "2026-10-15",
+  "generated_at": "2026-10-15T01:29:01.761Z",
+  "purpose": "Management inventory only; not loaded by Clash of Rust or sing-box. Never import wholesale as routing policy.",
+  "scope": "Both authorized static articles: target domains, keywords, IP/ASN and classification suggestions, plus cited public OpenAI list supplements and separate non-target references.",
+  "limitations": [
+    "Mutable third-party/community sources; not an official, exhaustive or permanent AI domain registry.",
+    "Static text only, no JavaScript execution and no OpenAI/Claude/Anthropic target requests by the inventory task.",
+    "No independent ownership or current IP/ASN announcement verification; associations are candidates, not official confirmation.",
+    "policy_state describes the explicitly deployed OpenAI and subsequently authorized Claude VPS IPv4-only classifiers, not all legacy server/client routes or per-host end-to-end verification.",
+    "Inventory-only/shared/unsafe states mean no separate new rule for this exact matcher; child domains may be covered by applied suffixes, and legacy rules may already exist.",
+    "Initial inventory creation catalogued Claude only. Following subsequent explicit authorization, 11 Claude matchers were deployed; shared/unsafe entries remain outside the new strict scope. Deployment and authorized production target tests are documented separately from this offline inventory update.",
+    "The implementation classifier was extracted as static text, never imported or executed. These inventory files perform no network/SSH/service operations."
+  ],
+  "sources": {
+    "netcoffee_gpt": {
+      "url": "https://ip.net.coffee/gpt/site.html",
+      "retrieved_date": "2026-10-15",
+      "http_status": 200
+    },
+    "netcoffee_claude": {
+      "url": "https://ip.net.coffee/claude/site.html",
+      "retrieved_date": "2026-10-15",
+      "http_status": 200
+    },
+    "v2fly_openai": {
+      "url": "https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/openai",
+      "retrieved_date": "2026-10-15",
+      "http_status": 200
+    },
+    "blackmatrix_openai": {
+      "url": "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/OpenAI/OpenAI.list",
+      "retrieved_date": "2026-10-15",
+      "http_status": 200
+    }
+  },
+  "entry_schema": {
+    "required": [
+      "service",
+      "match_type",
+      "value",
+      "category",
+      "source",
+      "policy_state"
+    ],
+    "service": [
+      "openai",
+      "claude",
+      "reference"
+    ],
+    "policy_state": [
+      "applied_vps_ipv4_only",
+      "inventory_only",
+      "shared_not_newly_forced",
+      "unsafe_not_applied"
+    ],
+    "match_type": [
+      "domain",
+      "domain_suffix",
+      "domain_regex",
+      "domain_keyword",
+      "ip_cidr",
+      "ip_asn",
+      "geosite",
+      "rule_set",
+      "url_path",
+      "url",
+      "service_name"
+    ],
+    "optional": {
+      "notes": "Explanatory array",
+      "covered_by_applied_suffix": "Parent matcher coverage, not a separately added rule"
+    }
+  },
+  "applied_policy_snapshot": {
+    "source": "Static read-only extraction of current round implementation classifier; no private server address included.",
+    "domain_suffix": [
+      "chat.com",
+      "chatgpt.com",
+      "chatgpt.site",
+      "oaistatic.com",
+      "oaistatsig.com",
+      "oaiusercontent.com",
+      "openai.com",
+      "sora.com",
+      "openai.com.cdn.cloudflare.net",
+      "chatgpt.livekit.cloud"
+    ],
+    "domain": [
+      "openaiapi-site.azureedge.net",
+      "openaiassets.blob.core.windows.net",
+      "openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net",
+      "openaicom.imgix.net",
+      "openaicomproductionae4b.blob.core.windows.net",
+      "production-openaicom-storage.azureedge.net",
+      "openai-api.arkoselabs.com",
+      "o33249.ingest.sentry.io",
+      "openai.qualtrics.com"
+    ],
+    "domain_regex": [
+      "^chatgpt-async-webps-prod-\\S+-\\d+\\.webpubsub\\.azure\\.com$"
+    ],
+    "semantics": "Matched destinations resolve IPv4-only and reject IPv6; IPv4 failure must not fall back to IPv6. Other traffic is outside this newly added classifier."
+  },
+  "summary": {
+    "total_entries": 102,
+    "by_service": {
+      "openai": 60,
+      "claude": 32,
+      "reference": 10
+    },
+    "by_source": {
+      "netcoffee_gpt": 46,
+      "netcoffee_claude": 37,
+      "v2fly_openai": 24,
+      "blackmatrix_openai": 35
+    },
+    "applied_vps_ipv4_only_entries": 31,
+    "by_policy_state": {
+      "applied_vps_ipv4_only": 31,
+      "inventory_only": 35,
+      "shared_not_newly_forced": 23,
+      "unsafe_not_applied": 13
+    },
+    "not_newly_applied_entries": 71,
+    "routing_suggestions_by_source": {
+      "netcoffee_gpt": 37,
+      "netcoffee_claude": 32,
+      "v2fly_openai": 23,
+      "blackmatrix_openai": 35
+    },
+    "applied_by_service": {
+      "openai": 20,
+      "claude": 11,
+      "reference": 0
+    }
+  },
+  "entries": [
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "openai.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Community/article association, not independent ownership verification.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "chatgpt.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Community/article association, not independent ownership verification.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "chat.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Community/article association, not independent ownership verification."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "sora.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Community/article association, not independent ownership verification."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "oaistatic.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Community/article association, not independent ownership verification.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "oaiusercontent.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Community/article association, not independent ownership verification.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "crixet.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Community/article association, not independent ownership verification."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "api.openai.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Example already covered by parent suffix; no separate rule added."
+      ],
+      "covered_by_applied_suffix": [
+        "openai.com"
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "auth.openai.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Example already covered by parent suffix; no separate rule added."
+      ],
+      "covered_by_applied_suffix": [
+        "openai.com"
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "platform.openai.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Example already covered by parent suffix; no separate rule added."
+      ],
+      "covered_by_applied_suffix": [
+        "openai.com"
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "ab.chatgpt.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Example already covered by parent suffix; no separate rule added."
+      ],
+      "covered_by_applied_suffix": [
+        "chatgpt.com"
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "url_path",
+      "value": "chatgpt.com/backend-api",
+      "category": "path_not_domain",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Host is covered by chatgpt.com; no path-specific rule added."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "url_path",
+      "value": "chatgpt.com/backend-api/codex",
+      "category": "path_not_domain",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Host is covered by chatgpt.com; no path-specific rule added."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "openai.com.cdn.cloudflare.net",
+      "category": "dedicated_cdn_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": []
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "openaicom.imgix.net",
+      "category": "dedicated_cdn_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": []
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "openaiapi-site.azureedge.net",
+      "category": "dedicated_cdn_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": []
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "production-openaicom-storage.azureedge.net",
+      "category": "dedicated_cdn_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "openaicomproductionae4b.blob.core.windows.net",
+      "category": "dedicated_cdn_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net",
+      "category": "dedicated_cdn_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "webpubsub.azure.com",
+      "category": "unsafe_broad_shared",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Shared Azure tenant namespace; not added. Scoped v2fly regex is a different matcher."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "client-api.arkoselabs.com",
+      "category": "shared_third_party",
+      "source": [
+        "netcoffee_gpt",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Generic Arkose endpoint; article specificity not independently proven. Not added.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "openai-api.arkoselabs.com",
+      "category": "dedicated_third_party_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "chatgpt.livekit.cloud",
+      "category": "dedicated_voice_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "host.livekit.cloud",
+      "category": "shared_voice_infrastructure",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Potentially shared voice infrastructure; not added.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "turn.livekit.cloud",
+      "category": "shared_voice_infrastructure",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Potentially shared voice infrastructure; not added.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "o33249.ingest.sentry.io",
+      "category": "dedicated_telemetry_candidate",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": []
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "browser-intake-datadoghq.com",
+      "category": "shared_telemetry",
+      "source": [
+        "netcoffee_gpt",
+        "v2fly_openai",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Shared Datadog receiving host, not demonstrated exclusive. Not added.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "stripe.com",
+      "category": "shared_mentioned_not_recommended",
+      "source": [
+        "netcoffee_gpt",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Article explicitly advises against blanket-routing this shared service.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "intercom.io",
+      "category": "shared_mentioned_not_recommended",
+      "source": [
+        "netcoffee_gpt",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Article explicitly advises against blanket-routing this shared service.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "auth0.com",
+      "category": "shared_mentioned_not_recommended",
+      "source": [
+        "netcoffee_gpt",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Article explicitly advises against blanket-routing this shared service.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "ai.com",
+      "category": "historical_not_recommended",
+      "source": [
+        "netcoffee_gpt",
+        "blackmatrix_openai"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Article excludes this historical redirect.",
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "service_name",
+      "value": "Statsig",
+      "category": "shared_service_name_only",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Product named without exact hostname here; no domain inferred."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "service_name",
+      "value": "LaunchDarkly",
+      "category": "shared_service_name_only",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Product named without exact hostname here; no domain inferred."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "service_name",
+      "value": "Segment",
+      "category": "shared_service_name_only",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Product named without exact hostname here; no domain inferred."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "geosite",
+      "value": "openai",
+      "category": "dynamic_rule_set_reference",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "No new whole-geosite policy; legacy server rules may still exist."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "rule_set",
+      "value": "geosite-openai",
+      "category": "dynamic_rule_set_reference",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Provider example only; no provider installed by this inventory."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "rule_set",
+      "value": "OpenAI",
+      "category": "dynamic_rule_set_reference",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Provider example only; no provider installed by this inventory."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "anthropic.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Selected Claude matcher now deployed as VPS IPv4-only under subsequent explicit user authorization; ownership attribution remains unverified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "claude.ai",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Selected Claude matcher now deployed as VPS IPv4-only under subsequent explicit user authorization; ownership attribution remains unverified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "claude.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Selected Claude matcher now deployed as VPS IPv4-only under subsequent explicit user authorization; ownership attribution remains unverified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "clau.de",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Selected Claude matcher now deployed as VPS IPv4-only under subsequent explicit user authorization; ownership attribution remains unverified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "claudemcpclient.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Selected Claude matcher now deployed as VPS IPv4-only under subsequent explicit user authorization; ownership attribution remains unverified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "claudemcpcontent.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Selected Claude matcher now deployed as VPS IPv4-only under subsequent explicit user authorization; ownership attribution remains unverified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "claudeusercontent.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Selected Claude matcher now deployed as VPS IPv4-only under subsequent explicit user authorization; ownership attribution remains unverified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "api.anthropic.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Covered by the deployed anthropic.com suffix; no separate exact-host matcher added."
+      ],
+      "covered_by_applied_suffix": [
+        "anthropic.com"
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "cdn.anthropic.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Covered by the deployed anthropic.com suffix; no separate exact-host matcher added."
+      ],
+      "covered_by_applied_suffix": [
+        "anthropic.com"
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "mcp.anthropic.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Covered by the deployed anthropic.com suffix; no separate exact-host matcher added."
+      ],
+      "covered_by_applied_suffix": [
+        "anthropic.com"
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "console.anthropic.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Covered by the deployed anthropic.com suffix; no separate exact-host matcher added."
+      ],
+      "covered_by_applied_suffix": [
+        "anthropic.com"
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "workbench.anthropic.com",
+      "category": "dedicated_subdomain_example",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Covered by the deployed anthropic.com suffix; no separate exact-host matcher added."
+      ],
+      "covered_by_applied_suffix": [
+        "anthropic.com"
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "anthropic.com.cdn.cloudflare.net",
+      "category": "dedicated_third_party_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Article association only; ownership not independently verified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "servd-anthropic-website.b-cdn.net",
+      "category": "dedicated_third_party_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Article association only; ownership not independently verified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "anthropic.auth0.com",
+      "category": "dedicated_third_party_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Article association only; ownership not independently verified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "anthropic-com.ghost.io",
+      "category": "dedicated_third_party_candidate",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Article association only; ownership not independently verified."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "sentry.io",
+      "category": "unsafe_broad_shared",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Shared namespace covering unrelated products."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "statsigapi.net",
+      "category": "unsafe_broad_shared",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Shared namespace covering unrelated products."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "intercom.io",
+      "category": "unsafe_broad_shared",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Shared namespace covering unrelated products."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "intercomcdn.com",
+      "category": "unsafe_broad_shared",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Shared namespace covering unrelated products."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "browser-intake-us5-datadoghq.com",
+      "category": "shared_third_party",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Exact host remains shared across unrelated products."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain",
+      "value": "cdn.usefathom.com",
+      "category": "shared_third_party",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Exact host remains shared across unrelated products."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_keyword",
+      "value": "datadog",
+      "category": "unsafe_broad_keyword",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Matches unrelated domain names; not an ownership boundary."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_keyword",
+      "value": "sentry",
+      "category": "unsafe_broad_keyword",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Matches unrelated domain names; not an ownership boundary."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_keyword",
+      "value": "sift",
+      "category": "unsafe_broad_keyword",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Matches unrelated domain names; not an ownership boundary."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "ip_cidr",
+      "value": "160.79.104.0/21",
+      "category": "claimed_ip_fallback",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Public target prefixes claimed by article, not VPS addresses; ownership/announcements unverified; article recommends no-resolve."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "ip_cidr",
+      "value": "2607:6bc0::/32",
+      "category": "claimed_ip_fallback",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Public target prefixes claimed by article, not VPS addresses; ownership/announcements unverified; article recommends no-resolve."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "ip_asn",
+      "value": "399358",
+      "category": "claimed_asn_fallback",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Article claim unverified against current announcements; recommends no-resolve."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "geosite",
+      "value": "anthropic",
+      "category": "dynamic_rule_set_reference",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Reference only; no new policy."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "geosite",
+      "value": "category-ntp",
+      "category": "misleading_ntp",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Standard NTP returns timestamps, not geographical time zones; article claim does not justify system NTP/UDP changes."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "domain_suffix",
+      "value": "datadoghq.com",
+      "category": "negative_example_not_recommended",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Article negative example: this suffix cannot match browser-intake-us5-datadoghq.com."
+      ]
+    },
+    {
+      "service": "claude",
+      "match_type": "geosite",
+      "value": "geolocation-!cn",
+      "category": "priority_example_not_target_inventory",
+      "source": [
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "General precedence example, not a Claude target classification."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "chatgpt.site",
+      "category": "dedicated_candidate",
+      "source": [
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Current public-list supplement omitted by article; community association, not ownership proof."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "oaistatsig.com",
+      "category": "dedicated_candidate",
+      "source": [
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Current public-list supplement omitted by article; community association, not ownership proof."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "openaiassets.blob.core.windows.net",
+      "category": "dedicated_cdn_candidate",
+      "source": [
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Current public-list supplement omitted by article."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "openai.qualtrics.com",
+      "category": "dedicated_telemetry_candidate",
+      "source": [
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Current public-list supplement omitted by article; source marks ads."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_regex",
+      "value": "^chatgpt-async-webps-prod-\\S+-\\d+\\.webpubsub\\.azure\\.com$",
+      "category": "scoped_realtime_candidate",
+      "source": [
+        "v2fly_openai"
+      ],
+      "policy_state": "applied_vps_ipv4_only",
+      "notes": [
+        "Scoped Azure hostname pattern, not entire shared webpubsub namespace."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "chat.openai.com.cdn.cloudflare.net",
+      "category": "dedicated_cdn_candidate",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ],
+      "covered_by_applied_suffix": [
+        "openai.com.cdn.cloudflare.net"
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain",
+      "value": "static.cloudflareinsights.com",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "algolia.net",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "api.statsig.com",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "events.statsigapi.net",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "featuregates.org",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "identrust.com",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "intercomcdn.com",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "launchdarkly.com",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "observeit.net",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "openaiapi-site.azureedge.net",
+      "category": "broader_than_applied_exact_host",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "openaicom.imgix.net",
+      "category": "broader_than_applied_exact_host",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "segment.io",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_suffix",
+      "value": "sentry.io",
+      "category": "shared_or_unverified_supplement",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "shared_not_newly_forced",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "domain_keyword",
+      "value": "openai",
+      "category": "unsafe_broad_or_stale_fallback",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "ip_cidr",
+      "value": "24.199.123.28/32",
+      "category": "unsafe_broad_or_stale_fallback",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "ip_cidr",
+      "value": "64.23.132.171/32",
+      "category": "unsafe_broad_or_stale_fallback",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "openai",
+      "match_type": "ip_asn",
+      "value": "20473",
+      "category": "unsafe_broad_or_stale_fallback",
+      "source": [
+        "blackmatrix_openai"
+      ],
+      "policy_state": "unsafe_not_applied",
+      "notes": [
+        "Cited supplemental list declares UPDATED 2025-06-06; not auto-imported or ownership confirmation."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "domain",
+      "value": "ip.net.coffee",
+      "category": "page_resource_not_ai_target",
+      "source": [
+        "netcoffee_gpt",
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Documentation/navigation/analytics/metadata only; no JavaScript executed."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "domain",
+      "value": "net.coffee",
+      "category": "page_resource_not_ai_target",
+      "source": [
+        "netcoffee_gpt",
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Documentation/navigation/analytics/metadata only; no JavaScript executed."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "domain",
+      "value": "card.net.coffee",
+      "category": "page_resource_not_ai_target",
+      "source": [
+        "netcoffee_gpt",
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Documentation/navigation/analytics/metadata only; no JavaScript executed."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "domain",
+      "value": "www.googletagmanager.com",
+      "category": "page_resource_not_ai_target",
+      "source": [
+        "netcoffee_gpt",
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Documentation/navigation/analytics/metadata only; no JavaScript executed."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "domain",
+      "value": "schema.org",
+      "category": "page_resource_not_ai_target",
+      "source": [
+        "netcoffee_gpt",
+        "netcoffee_claude"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Documentation/navigation/analytics/metadata only; no JavaScript executed."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "domain",
+      "value": "github.com",
+      "category": "cloud_sandbox_example_not_ai_target",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Clone/dependency traffic example, not an OpenAI target policy."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "service_name",
+      "value": "npm",
+      "category": "cloud_sandbox_example_not_ai_target",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Named package ecosystem, no hostname inferred."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "service_name",
+      "value": "pypi",
+      "category": "cloud_sandbox_example_not_ai_target",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Named package ecosystem, no hostname inferred."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "url",
+      "value": "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/OpenAI/OpenAI.list",
+      "category": "rule_source_not_ai_target",
+      "source": [
+        "netcoffee_gpt"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Public rule download source, not AI destination."
+      ]
+    },
+    {
+      "service": "reference",
+      "match_type": "url",
+      "value": "https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/openai",
+      "category": "rule_source_not_ai_target",
+      "source": [
+        "v2fly_openai"
+      ],
+      "policy_state": "inventory_only",
+      "notes": [
+        "Public rule download source, not AI destination."
+      ]
+    }
+  ],
+  "deployment_evidence": "docs/vps-ai-ipv4-change-2026-10-15.md",
+  "updated_at": "2026-10-15T01:41:26.689Z",
+  "claude_applied_policy_snapshot": {
+    "source": "Static read-only extraction of the subsequent authorized Claude implementation classifier; no private server address included.",
+    "domain_suffix": [
+      "anthropic.com",
+      "claude.ai",
+      "claude.com",
+      "clau.de",
+      "claudemcpclient.com",
+      "claudemcpcontent.com",
+      "claudeusercontent.com"
+    ],
+    "domain": [
+      "anthropic.com.cdn.cloudflare.net",
+      "servd-anthropic-website.b-cdn.net",
+      "anthropic.auth0.com",
+      "anthropic-com.ghost.io"
+    ],
+    "domain_regex": [],
+    "semantics": "Matched Claude destinations resolve IPv4-only and reject IPv6; IPv4 failure must not fall back to IPv6. All pre-existing production rules retain their relative order; shared and unsafe suggestions were not newly forced.",
+    "deployment_evidence": "docs/vps-claude-ipv4-change-2026-10-15.md"
+  },
+  "deployment_evidence_by_service": {
+    "openai": "docs/vps-ai-ipv4-change-2026-10-15.md",
+    "claude": "docs/vps-claude-ipv4-change-2026-10-15.md"
+  }
+}

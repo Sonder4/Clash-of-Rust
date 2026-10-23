@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src 'none'; base-uri 'none'; form-action 'none'">
+<title>WSL · Windows · VPS — 德国出口方案</title>
+<style>
+:root{--bg:#f4f1e9;--surface:#fcfaf5;--recess:#eae6db;--border:#d8d1c2;--text:#252b2b;--text-dim:#606b68;--ink:#234d49;--ink-dim:#e4ece6;--amber:#8a560e;--amber-dim:#f3e7cf;--red:#953c2d;--red-dim:#f5e4de;--green:#3f6847;--green-dim:#e6eddf;--mono:'Cascadia Code','Consolas',monospace;--body:'Bahnschrift','Microsoft YaHei','PingFang SC',sans-serif;--display:'Georgia','STZhongsong','SimSun',serif}
+@media(prefers-color-scheme:dark){:root{--bg:#182321;--surface:#202e2a;--recess:#15201e;--border:#3b4c45;--text:#f0eee5;--text-dim:#b1bdb1;--ink:#a3c7ba;--ink-dim:#2b443a;--amber:#efc378;--amber-dim:#443b27;--red:#f1a38d;--red-dim:#4b302b;--green:#b1d19c;--green-dim:#2c4030}}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:80px}body{margin:0;color:var(--text);font-family:var(--body);font-size:16px;line-height:1.75;background:radial-gradient(ellipse at 92% 0,var(--amber-dim),transparent 48%),repeating-linear-gradient(0deg,transparent,transparent 39px,color-mix(in srgb,var(--border) 30%,transparent) 40px),var(--bg)}
+a{color:var(--ink);text-underline-offset:4px}code,.eyebrow,.tag,.num,.meta,.toc-title{font-family:var(--mono)}code{font-size:.88em;background:var(--recess);padding:.1em .32em;border-radius:3px;overflow-wrap:anywhere}.wrap{max-width:1440px;margin:auto;display:grid;grid-template-columns:175px minmax(0,1fr);gap:44px;padding:42px 48px 70px}.main{min-width:0}.toc{position:sticky;top:32px;align-self:start;max-height:calc(100dvh - 64px);overflow:auto}.toc-title{font-size:11px;letter-spacing:2px;border-top:3px solid var(--ink);padding-top:14px;color:var(--text-dim)}.toc a{display:block;padding:9px 8px;border-left:2px solid transparent;font-size:13px;text-decoration:none;margin-top:6px}.toc a:hover,.toc a.active{background:var(--ink-dim);border-color:var(--ink)}.toc .edition{margin-top:28px;font-size:12px;color:var(--text-dim)}
+.eyebrow{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--ink)}h1{font:clamp(36px,4.5vw,64px)/1.16 var(--display);letter-spacing:-1px;margin:22px 0}h1 span{display:block;font:500 clamp(22px,2.5vw,34px)/1.4 var(--body);letter-spacing:0;margin-top:16px}h2{font-size:26px;line-height:1.4;margin:0 0 20px}h3{font-size:18px;line-height:1.45;margin:6px 0 10px}p{margin:8px 0 16px}.lead{font-size:18px;max-width:800px;color:var(--text-dim)}.hero{padding:20px 0 34px;border-bottom:1px solid var(--border)}.hero-band{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}.tag{font-size:11px;padding:5px 10px;border:1px solid var(--border);border-radius:2px;letter-spacing:.4px}.tag.warn{color:var(--amber);background:var(--amber-dim);border-color:color-mix(in srgb,var(--amber) 25%,var(--border))}.tag.ok{color:var(--green);background:var(--green-dim)}
+section{margin-top:42px;animation:reveal .5s both}.heading{display:flex;align-items:baseline;gap:16px}.num{font-size:13px;color:var(--amber)}.grid{display:grid;gap:16px;grid-template-columns:repeat(3,minmax(0,1fr))}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.card{min-width:0;overflow-wrap:anywhere;border:1px solid var(--border);padding:22px;background:var(--surface);border-radius:4px}.card .caption{font-size:12px;color:var(--text-dim)}.card.danger{border-top:3px solid var(--red)}.card.good{border-top:3px solid var(--green)}.card.warn{border-top:3px solid var(--amber)}.card p:last-child{margin-bottom:0}.callout{padding:18px 22px;border-left:4px solid var(--amber);background:var(--amber-dim);margin-top:18px;font-size:14px}.callout strong{color:var(--amber)}
+.system{border:1px solid var(--border);background:var(--surface);border-radius:4px;padding:24px}.system-grid{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:24px}.system-node{min-width:0;overflow-wrap:anywhere;padding:20px 18px;background:var(--recess);border-top:3px solid var(--ink);position:relative}.system-node:not(:last-child)::after{content:'→';position:absolute;right:-23px;top:35px;color:var(--ink);font-size:23px}.system-node p{font-size:14px}.system-node .eyebrow{letter-spacing:1px}.system-node.gated{background:var(--amber-dim);border-top-color:var(--amber)}.layer-label{margin:25px 0 12px;color:var(--text-dim);font:11px var(--mono);letter-spacing:1.6px}.branches{display:grid;grid-template-columns:1fr 1fr;gap:20px;border-top:1px dashed var(--border);padding-top:18px}.branch{padding:18px;background:var(--ink-dim);min-width:0;overflow-wrap:anywhere}.branch p{font-size:14px;margin-bottom:0}.branch.dns{background:var(--green-dim)}
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:4px}table{width:100%;border-collapse:collapse;background:var(--surface);min-width:640px;font-size:14px}thead{background:var(--ink-dim);text-align:left}th,td{padding:14px 16px;border-bottom:1px solid var(--border);vertical-align:top}th{font-size:12px}td:first-child{width:20%;font-weight:600}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:color-mix(in srgb,var(--recess) 35%,var(--surface))}.status{font-size:12px;color:var(--amber);font-weight:600}.timeline{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--border);background:var(--surface)}.phase{min-width:0;overflow-wrap:anywhere;padding:18px 15px;border-right:1px solid var(--border)}.phase:last-child{border:0}.phase .eyebrow{color:var(--amber)}.phase p{font-size:13px;color:var(--text-dim);margin:7px 0 0}.links{display:grid;grid-template-columns:1fr 1fr;gap:12px}.links a{display:block;padding:14px 18px;background:var(--surface);border:1px solid var(--border);font-size:14px;text-decoration:none;overflow-wrap:anywhere}.links a small{display:block;color:var(--text-dim);font-family:var(--mono);font-size:11px;margin-top:5px}.meta{font-size:11px;color:var(--text-dim);margin-top:30px;border-top:1px solid var(--border);padding-top:18px}
+@keyframes reveal{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important}}@media(max-width:1050px){.wrap{grid-template-columns:1fr;padding:0 26px 40px;gap:10px}.toc{top:0;z-index:5;display:flex;gap:8px;max-height:none;background:var(--bg);padding:12px 0;border-bottom:1px solid var(--border);overflow-x:auto}.toc-title,.toc .edition{display:none}.toc a{white-space:nowrap;margin:0;padding:5px 12px}.hero{padding-top:26px}.timeline{grid-template-columns:1fr 1fr}.phase{border-bottom:1px solid var(--border)}.phase:last-child{grid-column:1/-1}}@media(max-width:650px){.wrap{padding:0 18px 30px}.grid,.grid.two,.links,.system-grid,.branches{grid-template-columns:1fr}.system{padding:16px}.system-grid{gap:30px}.system-node:not(:last-child)::after{content:'↓';right:auto;top:auto;bottom:-30px;left:24px}.timeline{grid-template-columns:1fr}.phase{border-right:0}.heading{gap:10px}.lead{font-size:16px}h1{font-size:39px}h2{font-size:23px}.card{padding:19px}.system-node{padding:17px}.meta{font-size:10px}}
+@media print{body{background:white;color:black}.wrap{display:block;padding:0}.toc{display:none}.card,.system,.table-wrap,.phase{break-inside:avoid}section{animation:none}.tag{border-color:#aaa}a{color:black}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="章节导航">
+<div class="toc-title">DESIGN DOSSIER</div>
+<a href="#brief">目标与边界</a><a href="#architecture">双平面架构</a><a href="#identity">三种身份</a><a href="#evidence">当前证据</a><a href="#gates">实施闸门</a><a href="#documents">完整文档</a>
+<div class="edition">2026.10.15<br>Asia/Taipei<br><br>分析 / 未部署<br>无外部资源请求</div>
+</nav>
+<main class="main">
+<header class="hero" id="brief">
+<div class="eyebrow">NETWORK & IDENTITY · ARCHITECTURE REVIEW</div>
+<h1>一个公网出口，<br>不是一台相同的电脑。<span>WSL → Windows Clash → 德国 VPS</span></h1>
+<p class="lead">将 WSL 的网络出口、解析链和应用环境统一到受控的德国 VPS 路径。Windows 是承载节点，不应成为目标网站看到的公网来源；但它并不会从本地硬件、内核与互操作环境中消失。</p>
+<div class="hero-band"><span class="tag warn">方案评估 · 尚未部署</span><span class="tag">正式 EXE 0.5.9 / 同一核心</span><span class="tag">TCP + UDP + 双栈需独立验收</span><span class="tag ok">本轮未改变网络状态</span></div>
+</header>
+<section id="architecture">
+<div class="heading"><span class="num">01</span><h2>数据与解析，必须分开设计</h2></div>
+<div class="system">
+<div class="system-grid">
+<article class="system-node"><div class="eyebrow">WSL / MANAGED SCOPE</div><h3>原生应用与透明层</h3><p>CLI、浏览器、Claude 子进程。不依赖代理变量；DNS、UDP relay、IPv6、启动拒绝直连一并设计。</p><span class="tag">本地权限边界须明确</span></article>
+<article class="system-node gated"><div class="eyebrow">WINDOWS / TRANSPORT</div><h3>Clash 同核心固定入口</h3><p>不经过普通分流或 DIRECT 回退；配置再生后仍保持。<strong>当前官方版本缺少原生持久自定义 listener，是首要可行性闸门。</strong></p><span class="tag warn">不能直接复用旧维护器</span></article>
+<article class="system-node"><div class="eyebrow">VPS / EGRESS</div><h3>核实的德国出口</h3><p>客户端到 VPS 的 IPv6 ≠ 目标出站的 IPv6。按实际目标核验出口，地区归属冲突时不放行。</p><span class="tag">目标仅见 VPS 来源</span></article>
+</div>
+<div class="layer-label">AFTER VPS · TWO DISTINCT FLOWS</div>
+<div class="branches"><article class="branch"><h3>业务数据面</h3><p>VPS 建立到目标服务的连接。公网来源查询应显示 VPS 出口；TLS、HTTP 与应用行为仍由具体客户端产生。</p></article><article class="branch dns"><h3>DNS 解析面</h3><p>受管解析请求也经 VPS 到核实的非大陆 resolver；解析结果再用于连接。DNS 不是所有业务数据的串行下一跳。</p></article></div>
+</div>
+<div class="callout"><strong>禁止替代目标：</strong>普通 17890 + HTTP_PROXY、全 Windows GLOBAL、单次出口探针或“阻断一切”都不能单独证明完整接管。独立 WireGuard 直连和在 VPS 上运行程序是不同架构，不能悄悄替换本方案。</div>
+</section>
+<section id="identity">
+<div class="heading"><span class="num">02</span><h2>“看到的 IP”，其实有三层</h2></div>
+<div class="grid">
+<article class="card good"><div class="eyebrow">PUBLIC IDENTITY</div><h3>公网服务看到的来源</h3><p>公网 curl / 接收端日志应为 VPS IPv4 或 IPv6，不是宿主网络的公网地址。必须覆盖无代理环境、UDP、IPv6 与动态目标。</p><p class="caption">可通过端到端网络设计验证。</p></article>
+<article class="card warn"><div class="eyebrow">LOCAL IDENTITY</div><h3>本地命令看到的接口</h3><p><code>ip addr</code> 如实枚举当前网络空间。可评估独立 namespace，让普通负载只看到自己的回环与私有 TUN/veth，减少宿主接口暴露。</p><p class="caption">这不是赋予 VPS 公网地址，更不是伪造命令输出。</p></article>
+<article class="card danger"><div class="eyebrow">DEVICE IDENTITY</div><h3>内核、硬件与应用特征</h3><p>WSL 内核、WSLg GPU、字体、TLS栈、账号历史和机房 ASN 不会因代理自动改变。德国 IP 不保证平台判断为德国电脑。</p><p class="caption">一致性与最小暴露，不是完整复刻保证。</p></article>
+</div>
+<div class="callout"><strong>保留而非重建：</strong>Europe/Berlin 与 DST、既有 en-US 英语、浏览器 profile 和 Claude 数据。GeoIP 必须跟随核验后的实际出口；不要为迁移重装应用、随机化身份或修改 CC Switch。</div>
+</section>
+<section id="evidence">
+<div class="heading"><span class="num">03</span><h2>现状证据与未证明的部分</h2></div>
+<p style="font-size:13px;color:var(--text-dim)">手机端可横向滚动表格，查看“不能推导出的结论”。</p>
+<div class="table-wrap" role="region" aria-label="当前证据表，可横向滚动" tabindex="0"><table>
+<thead><tr><th>对象</th><th>本轮观察</th><th>不能推导出的结论</th></tr></thead>
+<tbody>
+<tr><td>Clash 核心</td><td>10:29：v1.19.32 / rule / TUN 开启；普通 17890。</td><td>不能证明 WSL 全部流量固定 VPS。</td></tr>
+<tr><td>旧 WSL 入口</td><td>18001、1053、规划的17892 未监听。</td><td>旧代理和 DNS 依赖目前不能视为可用。</td></tr>
+<tr><td>WSL</td><td>10:28：Ubuntu 与 Docker 发行版均停止；未启动。</td><td>不能确认当前 Linux 文件、时区或应用适配器状态。</td></tr>
+<tr><td>DNS</td><td>runtime 两个 nameserver 带专用组路由；无独立 DNS listen。</td><td>既不证明全部直连，也不证明所有解析路径无泄漏。</td></tr>
+<tr><td>关键网址</td><td>10:28：主机 DNS 正常；校园网与 API 最终 HTTP 200 / TLS通过。</td><td>不代替 WSL 连通性、地区及业务路径验收。</td></tr>
+<tr><td>IPv4 / IPv6</td><td>历史服务端对明确 AI 域名设置 IPv4-only。</td><td>不覆盖任意第三方、未知域或 legacy gateway。</td></tr>
+</tbody></table></div>
+<p class="meta">以上是时间点证据；不是长期保证。本轮未 SSH、未启动 WSL、未访问 Claude、未改变配置。</p>
+</section>
+<section id="gates">
+<div class="heading"><span class="num">04</span><h2>先过可行性闸门，再谈部署</h2></div>
+<div class="timeline">
+<article class="phase"><div class="eyebrow">P1 / INVENTORY</div><h3>实际盘点</h3><p>统一实施者；备份后安排 WSL 观察窗口，核对旧服务、DNS、适配器与容器。</p></article>
+<article class="phase"><div class="eyebrow">P2 / CORE GATE</div><h3>固定入口</h3><p>隔离验证同核心持久机制。原生支持缺口未解决，不迁移应用。</p></article>
+<article class="phase"><div class="eyebrow">P3 / DATA PLANE</div><h3>透明接管</h3><p>验证 TCP、UDP、双栈、DNS、代理循环和 fail-closed 启动次序。</p></article>
+<article class="phase"><div class="eyebrow">P4 / BOUNDARIES</div><h3>身份与边界</h3><p>稳定身份；独立处理 Docker、Windows interop、WSLg与工具子进程。</p></article>
+<article class="phase"><div class="eyebrow">P5 / ACCEPTANCE</div><h3>范围化验收</h3><p>端到端关联证据、隔离故障验证、定向回退；不影响校园认证与 API。</p></article>
+</div>
+<div class="grid two" style="margin-top:18px">
+<article class="card warn"><h3>安全通过 ≠ 功能通过</h3><p>UDP 或 IPv6 被拒绝而没有泄漏，可以是安全降级；但对应功能仍未完成。不可用时直连回退则安全不通过。</p></article>
+<article class="card danger"><h3>不使用生产网络注入故障</h3><p>不停止共享核心、不切断 DNS/网卡、不重建全局 NRPT。故障测试在隔离环境；每次实际网络变更前后验证关键网址。</p></article>
+</div>
+</section>
+<section id="documents">
+<div class="heading"><span class="num">05</span><h2>完整要求、依据与专家评审</h2></div>
+<div class="links">
+<a href="wsl-vps-requirements-and-plan-2026-10-15.md">需求原文与总纲<small>R01–R13 · 证据等级 · 分阶段实施</small></a>
+<a href="wsl-vps-network-architecture-2026-10-15.md">网络架构专家报告<small>同核心固定路径 · 透明层 · 候选方案</small></a>
+<a href="wsl-vps-identity-threat-model-2026-10-15.md">身份与威胁模型<small>本地 CLI · WSLg · 浏览器 · 权限边界</small></a>
+<a href="wsl-vps-validation-and-review-2026-10-15.md">独立验收与评审<small>官方资料 · 通过证据 · 隔离故障场景</small></a>
+</div>
+<p class="meta">DESIGN ONLY · 2026-10-15 · 本页离线自包含，无 CDN、外部字体、跟踪或目标服务请求。分析交付完成不表示运行目标已经实现。</p>
+</section>
+</main>
+</div>
+<script>
+const links=[...document.querySelectorAll('.toc a')];
+const observer=new IntersectionObserver(entries=>{for(const entry of entries){if(entry.isIntersecting){links.forEach(link=>link.classList.toggle('active',link.hash==='#'+entry.target.id));}}},{rootMargin:'-10% 0px -65% 0px'});
+document.querySelectorAll('header[id],section[id]').forEach(section=>observer.observe(section));
+function measure(){document.documentElement.dataset.layoutOverflow=String(document.documentElement.scrollWidth>window.innerWidth+1);document.documentElement.dataset.viewportWidth=String(window.innerWidth);}
+window.addEventListener('load',measure);window.addEventListener('resize',measure);
+</script>
+</body>
+</html>

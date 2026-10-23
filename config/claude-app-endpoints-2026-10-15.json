@@ -1,0 +1,2239 @@
+{
+  "schema_version": 1,
+  "inventory_date": "2026-10-15",
+  "purpose": "Offline management inventory only. Never auto-import as routing rules.",
+  "artifacts": {
+    "cli_exe": {
+      "version": "2.1.299",
+      "sha256": "295b49ec092f31a7de9c6ff286d9d8f120a4f029b9ad9a5ac0b12c35cbf4df2b",
+      "bytes": 269231264
+    },
+    "desktop_asar": {
+      "version": "2.19675.1",
+      "sha256": "37e9d113862178af8a802d1e20db3bcc081d11056e4d8de5b83b9040f9050f8e",
+      "bytes": 43091042
+    }
+  },
+  "rea_desktop_evidence_id": "ev_59d52a414bb51a136ca6fe95f9eec312eb99dde2c18a0aece8ea4906e6673257",
+  "limitations": [
+    "Static code/literals/configuration only, not runtime requests or proof of reachability/coverage.",
+    "REA semantic coverage partial; six unpacked native files contradict ASAR declared hashes. No official authenticity conclusion.",
+    "CLI evidence is bounded literal/embedded-code inspection, not complete native decompilation.",
+    "URL host templates and wildcard inventories are not observed DNS resolutions.",
+    "VPS policy is the prior documented snapshot, not a new SSH or live egress test.",
+    "Local policy assessment is domain-only; no IP/GEO/logical-rule resolution performed.",
+    "Web UI, user tools, redirects, native/VM/WSL and remote managed configurations can add targets.",
+    "No credentials, private URLs, userinfo, queries, session IDs or raw configurations included."
+  ],
+  "runtime_policy_observed_at": "2026-10-15T10:11:00.832523+08:00",
+  "runtime_policy": {
+    "mode": "rule",
+    "tun_enabled": true,
+    "find_process_mode": "off",
+    "mixed_port": 17890
+  },
+  "literal_negative_searches": {
+    "cli_statsig.com": "zero literal occurrences",
+    "cli_statsig.anthropic.com": "zero literal occurrences; not a universal absence proof"
+  },
+  "entry_count": 84,
+  "entries": [
+    {
+      "host_or_template": "api.anthropic.com",
+      "category": "api",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Production default or feature-dependent; not every invocation contacts this host.",
+      "public_path_templates": [
+        "/v1/messages",
+        "/v1/messages/count_tokens",
+        "/api/oauth/claude_cli/roles"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 270476
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 270741
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116659772
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 118239800
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "anthropic.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "claude.ai",
+      "category": "hosted_ui_and_session",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Production default or feature-dependent; not every invocation contacts this host.",
+      "public_path_templates": [
+        "/",
+        "/code",
+        "/oauth/claude-code-client-metadata"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/aboutWindow.js",
+          "byte_offset": 3115
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/buddy.js",
+          "byte_offset": 2519
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 112092664
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 112669565
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claude.ai",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "claude.com",
+      "category": "oauth_and_site",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Production default or feature-dependent; not every invocation contacts this host.",
+      "public_path_templates": [
+        "/cai/oauth/authorize"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/aboutWindow.js",
+          "byte_offset": 3315
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/buddy.js",
+          "byte_offset": 2719
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116765120
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 117153488
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claude.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "platform.claude.com",
+      "category": "oauth",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Production default or feature-dependent; not every invocation contacts this host.",
+      "public_path_templates": [
+        "/oauth/authorize",
+        "/v1/oauth/token",
+        "/oauth/code/callback"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 270526
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 270684
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116062188
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116062372
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219976705
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claude.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "mcp-proxy.anthropic.com",
+      "category": "managed_mcp",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Production default or feature-dependent; not every invocation contacts this host.",
+      "public_path_templates": [
+        "/v1/mcp/{server_id}"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 271336
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116062688
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219977579
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "anthropic.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "downloads.claude.ai",
+      "category": "update_and_catalog",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Production default or feature-dependent; not every invocation contacts this host.",
+      "public_path_templates": [
+        "/claude-code-releases",
+        "/model-catalog/v1/catalog.json",
+        "/model-catalog/v1/catalog.json.raw-sig.json"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BIxplVif.js",
+          "byte_offset": 9557
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BIxplVif.js",
+          "byte_offset": 9624
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 232438830
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 233262659
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claude.ai",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "bridge.claudeusercontent.com",
+      "category": "browser_and_device_bridge",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Production default or feature-dependent; not every invocation contacts this host.",
+      "public_path_templates": [
+        "/devices/{dynamic}/bridge"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 4071262
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 5332060
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claudeusercontent.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "assets.claude.ai",
+      "category": "static_assets",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BFBomu2w.js",
+          "byte_offset": 128650
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BFBomu2w.js",
+          "byte_offset": 128879
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claude.ai",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "assets-proxy.anthropic.com",
+      "category": "asset_warmup",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [
+        "/claude-ai/v2/ping.txt"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 308540
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "anthropic.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "releases.claude.com",
+      "category": "optional_desktop_update_feed",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [
+        "/api/desktop/{platform}/{arch}/update"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claude.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "www.claudeusercontent.com",
+      "category": "artifact_preview",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claudeusercontent.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "*.frame.claudeusercontent.com",
+      "category": "artifact_preview",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claudeusercontent.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "*.claudemcpcontent.com",
+      "category": "mcp_widget",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claudemcpcontent.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "sandbox.claudemcpcontent.com",
+      "category": "mcp_widget",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claudemcpcontent.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "pivot.claude.ai",
+      "category": "office_addin",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [
+        "/manifest.xml"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-rZJ8qbdl.js",
+          "byte_offset": 9645
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claude.ai",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "microsoft365.mcp.claude.com",
+      "category": "optional_managed_mcp",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Feature/configuration dependent; updateViaUpdatesHost selects releases.claude.com, not the default feed.",
+      "public_path_templates": [
+        "/mcp"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 941324
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.pre.js",
+          "byte_offset": 680717
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "claude.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "api.anthropic.com",
+      "category": "first_party_telemetry",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Telemetry policy/consent and deployment mode dependent.",
+      "public_path_templates": [
+        "/api/event_logging/v2/batch"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 270476
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 270741
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116659772
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 118239800
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 223344980
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": "anthropic.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "http-intake.logs.us5.datadoghq.com",
+      "category": "shared_telemetry",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Conditional telemetry/error-reporting implementation; not proof of an active request.",
+      "public_path_templates": [
+        "/api/v2/logs"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 227701123
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "browser-intake-us5-datadoghq.com",
+      "category": "shared_telemetry",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Conditional telemetry/error-reporting implementation; not proof of an active request.",
+      "public_path_templates": [
+        "/api/v2/logs"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 227717210
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "o1158394.ingest.us.sentry.io",
+      "category": "shared_telemetry",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Conditional telemetry/error-reporting implementation; not proof of an active request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.pre.js",
+          "byte_offset": 1075595
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.pre.js",
+          "byte_offset": 1075595
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "sentry.io",
+      "category": "shared_telemetry",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Conditional telemetry/error-reporting implementation; not proof of an active request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "*.sentry.io",
+      "category": "shared_telemetry",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Conditional telemetry/error-reporting implementation; not proof of an active request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "browser-intake-datadoghq.com",
+      "category": "shared_telemetry_candidates",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled Datadog host inventory; exact region and activation are dynamic.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "browser-intake-us3-datadoghq.com",
+      "category": "shared_telemetry_candidates",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled Datadog host inventory; exact region and activation are dynamic.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "browser-intake-ap1-datadoghq.com",
+      "category": "shared_telemetry_candidates",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled Datadog host inventory; exact region and activation are dynamic.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "browser-intake-ap2-datadoghq.com",
+      "category": "shared_telemetry_candidates",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled Datadog host inventory; exact region and activation are dynamic.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "protected_domain_rule",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "browser-intake-datadoghq.eu",
+      "category": "shared_telemetry_candidates",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled Datadog host inventory; exact region and activation are dynamic.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "browser-intake-ddog-gov.com",
+      "category": "shared_telemetry_candidates",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled Datadog host inventory; exact region and activation are dynamic.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "storage.googleapis.com",
+      "category": "shared_storage",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "CLI plugin detail catalog; Desktop signed export URLs. Shared host is not dedicated to Claude.",
+      "public_path_templates": [
+        "/{published_bucket}/plugin-stats/plugin-details.json",
+        "/{dynamic_signed_export}"
+      ],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 111920272
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 232455457
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 232455465
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "www.google.com",
+      "category": "optional_shared_ui_assets",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Connector favicons or artifact assets, potentially redirected; not model API.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "*.gstatic.com",
+      "category": "optional_shared_ui_assets",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Connector favicons or artifact assets, potentially redirected; not model API.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "cdnjs.cloudflare.com",
+      "category": "optional_shared_ui_assets",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Connector favicons or artifact assets, potentially redirected; not model API.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BFBomu2w.js",
+          "byte_offset": 33557
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BFBomu2w.js",
+          "byte_offset": 115158
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "fonts.googleapis.com",
+      "category": "optional_shared_ui_assets",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Connector favicons or artifact assets, potentially redirected; not model API.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BFBomu2w.js",
+          "byte_offset": 350311
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "cdn.jsdelivr.net",
+      "category": "optional_shared_ui_assets",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Connector favicons or artifact assets, potentially redirected; not model API.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BFBomu2w.js",
+          "byte_offset": 119289
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BFBomu2w.js",
+          "byte_offset": 119416
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "github.com",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/heavy-work-worker/dist-CI9lzb1v.js",
+          "byte_offset": 20991
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/heavy-work-worker/dist-CI9lzb1v.js",
+          "byte_offset": 23853
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "api.github.com",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-CROr9Fj9.js",
+          "byte_offset": 2245
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DXWCmLWm.js",
+          "byte_offset": 18193
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "raw.githubusercontent.com",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/file-index-worker/fileIndexWorker.js",
+          "byte_offset": 58923
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/file-index-worker/fileIndexWorker.js",
+          "byte_offset": 81123
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "objects.githubusercontent.com",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "registry.npmjs.org",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "pypi.org",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "files.pythonhosted.org",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "crates.io",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "index.crates.io",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "static.crates.io",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "archive.ubuntu.com",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "security.ubuntu.com",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "cdn.playwright.dev",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "playwright.download.prss.microsoft.com",
+      "category": "optional_development_dependency",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Bundled workspace/package egress inventory; used only if a task/tool/install needs it, not a mandatory Claude request.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "mcp.box.com",
+      "category": "optional_external_connector",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Only if that connector is selected/configured; remote MCP can use any administrator-supplied URL.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 941508
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.pre.js",
+          "byte_offset": 680901
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "mcp.figma.com",
+      "category": "optional_external_connector",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Only if that connector is selected/configured; remote MCP can use any administrator-supplied URL.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-p9zZ4vou.js",
+          "byte_offset": 424577
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "api.box.com",
+      "category": "optional_external_connector",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Only if that connector is selected/configured; remote MCP can use any administrator-supplied URL.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 713338
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 713601
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 1118600
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "accounts.google.com",
+      "category": "optional_provider_auth",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Cloud-provider/connector identity flow only; no authentication was performed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 713551
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 720827
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "oauth2.googleapis.com",
+      "category": "optional_provider_auth",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Cloud-provider/connector identity flow only; no authentication was performed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 2634577
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 2697179
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "sts.googleapis.com",
+      "category": "optional_provider_auth",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Cloud-provider/connector identity flow only; no authentication was performed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-ClBS4tV7.js",
+          "byte_offset": 1353
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "iamcredentials.googleapis.com",
+      "category": "optional_provider_auth",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Cloud-provider/connector identity flow only; no authentication was performed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "login.microsoftonline.com",
+      "category": "optional_provider_auth",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Cloud-provider/connector identity flow only; no authentication was performed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-6J4kxRmu.js",
+          "byte_offset": 1742
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 759869
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "no_protection_match_in_domain_only_audit",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "sts.windows.net",
+      "category": "optional_provider_auth",
+      "applications": [
+        "desktop"
+      ],
+      "condition": "Cloud-provider/connector identity flow only; no authentication was performed.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 765213
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.pre.js",
+          "byte_offset": 506671
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "bedrock-runtime.{region}.amazonaws.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "bedrock.{region}.amazonaws.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "bedrock-mantle.{region}.api.aws",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "sts.amazonaws.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 256909691
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 256914153
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "sts.{region}.amazonaws.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 240872642
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 256912132
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "oidc.{region}.amazonaws.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 118769228
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 256976855
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "portal.sso.{region}.amazonaws.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 114576264
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 240591330
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "{region}-aiplatform.googleapis.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "aiplatform.googleapis.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219839271
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 241247421
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "aiplatform.{eu_or_us}.rep.googleapis.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "{resource}.services.ai.azure.com",
+      "category": "optional_cloud_provider_template",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Requires the corresponding provider/region/resource selection; custom base URLs and partition/FIPS variants can replace it.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 677000
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "aws-external-anthropic.{region}.api.aws",
+      "category": "optional_cli_cloud_provider",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Selected anthropicAws or anthropicGoogleCloud provider only.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 267134002
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 224167789
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "claude.googleapis.com",
+      "category": "optional_cli_cloud_provider",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Selected anthropicAws or anthropicGoogleCloud provider only.",
+      "public_path_templates": [],
+      "evidence_type": "static_code",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 224167900
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 241240372
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 224167789
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "code.claude.com",
+      "category": "documentation_or_user_link",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Documentation/help/status reference; literal presence does not imply automatic connection.",
+      "public_path_templates": [],
+      "evidence_type": "literal_reference",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 107750176
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 107814200
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claude.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "support.claude.com",
+      "category": "documentation_or_user_link",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Documentation/help/status reference; literal presence does not imply automatic connection.",
+      "public_path_templates": [],
+      "evidence_type": "literal_reference",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 117489240
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 117489320
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claude.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "docs.anthropic.com",
+      "category": "documentation_or_user_link",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Documentation/help/status reference; literal presence does not imply automatic connection.",
+      "public_path_templates": [],
+      "evidence_type": "literal_reference",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 224013459
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 224054844
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "anthropic.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "status.claude.com",
+      "category": "documentation_or_user_link",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Documentation/help/status reference; literal presence does not imply automatic connection.",
+      "public_path_templates": [],
+      "evidence_type": "literal_reference",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 111729544
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 229789001
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claude.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "api.githubcopilot.com",
+      "category": "example_mcp_not_active_config",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Bundled example/template, not an observed user MCP configuration or mandatory endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "example_or_template",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 266637715
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 267702970
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 266637117
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "slack.mcp.claude.com",
+      "category": "example_mcp_not_active_config",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Bundled example/template, not an observed user MCP configuration or mandatory endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "example_or_template",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 266637982
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 266637117
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claude.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "mcp.asana.com",
+      "category": "example_mcp_not_active_config",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Bundled example/template, not an observed user MCP configuration or mandatory endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "example_or_template",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 266637117
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "mcp.sentry.dev",
+      "category": "example_mcp_not_active_config",
+      "applications": [
+        "cli"
+      ],
+      "condition": "Bundled example/template, not an observed user MCP configuration or mandatory endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "example_or_template",
+      "evidence_locations": [
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 248332019
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 267702771
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 266637117
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "api-staging.anthropic.com",
+      "category": "nondefault_environment_or_allowlist",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Staging/local/custom OAuth allowlist or alternate deployment; not established as the active production endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "nondefault_or_allowlist",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 3098265
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 3098716
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 223345014
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 223345050
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219976705
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "anthropic.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "bridge-staging.claudeusercontent.com",
+      "category": "nondefault_environment_or_allowlist",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Staging/local/custom OAuth allowlist or alternate deployment; not established as the active production endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "nondefault_or_allowlist",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 4071299
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 5332097
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219976705
+        }
+      ],
+      "client_policy_assessment": "within_protection_suffix_scope",
+      "vps_ipv4_only_snapshot_suffix": "claudeusercontent.com",
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "claude-ai.staging.ant.dev",
+      "category": "nondefault_environment_or_allowlist",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Staging/local/custom OAuth allowlist or alternate deployment; not established as the active production endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "nondefault_or_allowlist",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 3100067
+        },
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-DVtu79Rf.js",
+          "byte_offset": 3100466
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 113446804
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 226840839
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219976705
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "beacon.claude-ai.staging.ant.dev",
+      "category": "nondefault_environment_or_allowlist",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Staging/local/custom OAuth allowlist or alternate deployment; not established as the active production endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "nondefault_or_allowlist",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 272456
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116062816
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219978756
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219976705
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "claude-staging.fedstart.com",
+      "category": "nondefault_environment_or_allowlist",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Staging/local/custom OAuth allowlist or alternate deployment; not established as the active production endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "nondefault_or_allowlist",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 272529
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116062900
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219978829
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219976705
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    },
+    {
+      "host_or_template": "claude.fedstart.com",
+      "category": "nondefault_environment_or_allowlist",
+      "applications": [
+        "cli",
+        "desktop"
+      ],
+      "condition": "Staging/local/custom OAuth allowlist or alternate deployment; not established as the active production endpoint.",
+      "public_path_templates": [],
+      "evidence_type": "nondefault_or_allowlist",
+      "evidence_locations": [
+        {
+          "artifact": "desktop_asar",
+          "member": ".vite/build/index.chunk-BaivF2vS.js",
+          "byte_offset": 272499
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 116062864
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219978799
+        },
+        {
+          "artifact": "cli_exe",
+          "byte_offset": 219976705
+        }
+      ],
+      "client_policy_assessment": "not_individually_evaluated",
+      "vps_ipv4_only_snapshot_suffix": null,
+      "runtime_request_observed": false
+    }
+  ]
+}
