@@ -91,6 +91,11 @@ The current user request is captured in three change records:
   this machine's migration, autostart and diagnostic scripts. They are local
   tools, not part of the installed product, and every network-mutating one
   requires the mandatory connectivity baseline first.
+- [Documentation index](../README.md) is the entry point for every document in
+  this repository.
+- [Project process record](../PROJECT_PROCESS_2026-10.md) consolidates the
+  requirements, approved plan, timeline, verification evidence and open items
+  assembled from the Codex and Claude sessions.
 
 ### Local run records
 
