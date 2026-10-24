@@ -518,7 +518,45 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:9090/configs' -Headers $h |
 4. **用户历史记录互证（[需求汇编](user-requirements-compilation-2026-10-24.md)）**：PC 端 TUN 故障最早记录于 2026-10-24 00:06（"之前可以正常使用"）与 00:29（"只能上传"），**早于当晚全部修复操作**（D:\Clash 迁移与本地重编译是 01:25 用户指示下的修复尝试）；10-21/10-23 存在手机端 TUN 同类故障记录；10-14 至 10-23 期间没有任何"PC 端 TUN 验证可用"的记录（10-15 交接明确"TUN 开启但未通过实际流量验证"，日常验证通过的一直是系统代理模式）。"先前脚本搞坏网络"的假设由此被当事人时间线、隔离裸跑复现（`core-isolation.log`）与配置穷举三方共同排除。
 
 
-### 12.16 限制
+### 12.17 0.6.3 部署后的 TUN 实测与事故记录（2026-10-24 11:56–12:20）
+
+部署合并构建（含 §12.16 两项修复）到 `D:\Clash\Clash of Rust`（旧件 `.bak-062-*`）。过程与结论：
+
+1. **GUI 空白窗口**：0.6.3 宿主+渲染进程架构启动后内核未拉起、窗口空白。根因之一已定位：数据目录残留旧协议 `control.json`（protocol=1）导致新版握手失败；清除后 `cor start` 正常拉起内核。GUI 完整修复待后续专项（日常入口用 `cor` CLI：`cor start/stop/restart/status/proxy`）。
+2. **TUN 实测（`cor proxy tun`，含两项修复的生成配置）**：窗口内 `open.bigmodel.cn` 200、`platform.deepseek.com` 429、`ipgw` 302（校园排除生效）、`cloudflare` 200（经节点，代理路径正常）——**IP 式 DoH 与自动排除两项修复在 TUN 下确实生效**；但 `api.deepseek.com` 000（部分 IP 未覆盖/DIRECT 回环）且 `zcode.z.ai` 等 GeoSite/CN 域名在 TUN 下全部回环（GLM 5.3 API 因此不可达）。
+3. **事故（本代理失误）**：TUN 验收命令结束后未执行回滚，TUN 留在开启状态，导致用户整机断网（含 zcode/GLM），用户手动结束 Clash 进程恢复直连。处置：settings 强制 `proxy_mode=system`、清除陈旧 `control.json`、`cor start` 恢复，复验 `ipgw` 302 / `okinto` 200 / `bigmodel` 200 / `api.deepseek` 401 / `zcode.z.ai` 307 全绿；补充 `DOMAIN-SUFFIX,z.ai,DIRECT` 规则。
+4. **当前决定**：TUN 保持关闭。新构建下 TUN 为"部分可用"（国外经节点 ✓、排除清单内直连 ✓、未排除国内 ✗——内核缺陷边界未变），且故障成本过高；日常使用系统代理模式（CLI/托盘入口）。
+
+
+
+### 12.18 TUN 下 AI 端点全通：nameserver-policy 方案定稿（2026-10-24 12:35–12:50）
+
+用户指示继续 TUN 测试（30 秒回滚纪律，`cor proxy tun` + try/finally 单命令窗口）。三轮迭代后全部通过：
+
+| 轮次 | 变化 | 结果 |
+| --- | --- | --- |
+| 1 | zcode IP 排除补齐 | bigmodel/platform/ipgw/cloudflare 200；api.deepseek、zcode 仍 ERR（两轮一致，排除瞬时故障） |
+| 2 | 规则改 XUAN-VPS 经节点 | 同样失败——发现应用将 `GEOSITE,CN,DIRECT` 内置规则**前置**，profile 后缀规则永在其后不生效 |
+| 3 | **`dns.nameserver-policy`**：`+.deepseek.com`、`+.z.ai` → 校园 DNS 202.118.1.29 | **六端点两轮全绿**：bigmodel 200 / platform 200 / api.deepseek 401 / zcode.z.ai 200 / ipgw 200 / cloudflare 200 |
+
+**机制**：api.deepseek/zcode 失败的根因是 CDN 解析漂移——内核 DoH（doh.pub）把 api.deepseek 解析到腾讯 EdgeOne IP（14.116.x），与校园解析的移动 IP（36.131.x/221.180.x）完全不同，按 IP 枚举排除永远追不上。`nameserver-policy` 让这两个域用校园 DNS 解析：返回的移动 IP 已在排除表、校园 DNS 服务器本身也在排除表（TUN 下内核的该查询经物理网卡直达），不依赖规则顺序，零 IP 追逐维护。回滚后系统模式复验 302/200/200/401/307 全绿。
+
+**TUN 最终能力矩阵（0.6.3 合并构建 + 本配置）**：国外（经节点）✅；排除清单/策略内国内目标（校园、bigmodel、deepseek、z.ai）✅；未列入排除的普通国内站点 ❌（内核 DIRECT 拨号自捕获缺陷，待上游，见 §12.15）。启用 `cor proxy tun`，回滚 `cor proxy system`；日常建议系统代理模式。
+
+### 12.19 终局：根因是本机网络环境（用户假设证实），上游 DNS 无罪（2026-10-24 13:10–13:40）
+
+用户坚持两点：上游域名式 DoH 设计有其原因（非 bug）、本机其他网络环境有问题。实验完全证实：
+
+1. **按用户要求恢复上游原版 DNS**（doh.pub/dns.alidns.com，代码已回退并重建部署；注意 cor.exe 内嵌同一生成器，部署时必须同步替换，否则出现新旧混跑）。
+2. **环境隔离实验**：提权禁用 VirtNet（呈现名"以太网 2"，Up 且 metric 35 优于 WLAN 45，仅链路本地地址）与 TAP-Windows 两个历史遗留适配器（本地的 Wi-Fi Direct/ICS 192.168.137.1 适配器同期亦消失）。环境仅剩 WLAN + WSL + 系统 WAN Miniport。
+3. **决定性结果**：纯净环境 + 上游原版 DNS + TUN：**全部目标两轮全绿，包括未做任何排除的 baidu/qq（国内直连金丝雀）**——内核自豁免完全恢复。此前的"内核 DIRECT 拨号自捕获缺陷"结论（§12.15）**被推翻并修正**：真正机制是 VirtNet/TAP 一类多余虚拟适配器干扰 mihomo 的接口检测/自身出站豁免；在受干扰环境下仅"到节点的拨号"仍走绑定豁免，DNS 引导与 DIRECT 拨号全部回环。
+4. 元凶精确归属：VirtNet 与 TAP 启用后均无法经 Enable-NetAdapter/netsh 恢复（设备级禁用），无法单项 A/B；但两者皆为无使用者、无路由的历史遗留（审计确认），**保持禁用即最终修复**（需要时可在设备管理器手动重新启用——届时 TUN 会再次失效，可作反向验证）。
+5. **最终验证（上游 DNS + 禁用两适配器）**：TUN 下 baidu/qq/cloudflare/ipgw/bigmodel/platform.deepseek/api.deepseek(401)/zcode.z.ai 全通；回滚后系统代理 302/200/307；重启稳定。此前我方加入的 IP 式 DoH（已按用户要求回退）、nameserver-policy 与 AI IP 排除在自豁免恢复后不再是必要条件（保留无害，可按需清理）。
+6. 手机端数据点按用户说明作废（当时为订阅配置错误所致）。
+
+**最终结论**：TUN 问题的完整根因链 = 多余虚拟适配器（VirtNet metric 35 / TAP）→ mihomo 自身出站豁免失效 → DNS 引导自劫持 + DIRECT 拨号回环。上游 DNS 设计、订阅规则、应用代码均无过错。修复 = 禁用两个遗留适配器。感谢用户的方向坚持。
+
+### 12.20 限制
 
 - `Meta` 在 t+60s 消失的触发者未定位（内核 stderr 无持久化日志）。
 - 未抓包；回环结论由内核 `reject loopback` 日志（内核自身承认）、路由表实测、SynSent/Established 分布三方支撑，为当前可达的最强证据等级。
