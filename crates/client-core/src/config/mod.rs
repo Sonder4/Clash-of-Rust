@@ -973,8 +973,8 @@ mod tests {
                     expected["enable"] = Value::from(true);
                     expected["enhanced-mode"] = Value::from("fake-ip");
                     expected["nameserver"] = serde_yaml::to_value([
-                        "https://223.5.5.5/dns-query",
-                        "https://120.53.53.53/dns-query",
+                        "https://doh.pub/dns-query",
+                        "https://dns.alidns.com/dns-query",
                     ])
                     .unwrap();
                     let filters = expected["fake-ip-filter"].as_sequence_mut().unwrap();

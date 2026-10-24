@@ -4,13 +4,9 @@ use super::{Mapping, Settings, Value};
 use anyhow::{Context, Result, bail};
 
 /// Shared fallback used when a host needs DNS but the subscription provides none.
-// IP-literal DoH endpoints of the same public resolvers. Domain-form DoH
-// (doh.pub / dns.alidns.com) needs a UDP:53 bootstrap lookup first; under TUN
-// that bootstrap query is captured by the core's own dns-hijack and loops,
-// killing resolution for every connection (observed on Windows, 2026-10-24).
 pub const DEFAULT_DNS_NAMESERVERS: [&str; 2] = [
-    "https://223.5.5.5/dns-query",
-    "https://120.53.53.53/dns-query",
+    "https://doh.pub/dns-query",
+    "https://dns.alidns.com/dns-query",
 ];
 
 // Keep this list limited to local names and protocols/clients that need real
