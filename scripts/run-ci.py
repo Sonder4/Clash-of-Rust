@@ -1,8 +1,3 @@
-    if args.system == 'windows':
-        shutil.copy2(ROOT/'target/release/clash-wsl-guardian.exe', bundle/'clash-wsl-guardian.exe')
-    # Headless console smoke checks need neither a display nor a running kernel.
-    run([bundle/('cor'+extension), '--json', 'version'])
-    run([bundle/('cor'+extension), 'help'])
 """Compile/test one native platform; preserve release binaries for packaging."""
 import argparse
 import importlib.util
@@ -41,6 +36,11 @@ def main():
     extension = '.exe' if args.system == 'windows' else ''
     for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'):
         shutil.copy2(ROOT/'target/release'/(name+extension), bundle/(name+extension))
+    if args.system == 'windows':
+        shutil.copy2(ROOT/'target/release/clash-wsl-guardian.exe', bundle/'clash-wsl-guardian.exe')
+    # Headless console smoke checks need neither a display nor a running kernel.
+    run([bundle/('cor'+extension), '--json', 'version'])
+    run([bundle/('cor'+extension), 'help'])
     # Focus native checks on the core lifecycle and real proxy/TUN traffic.
     if args.system == 'macos':
         from macos_ci import native_tests

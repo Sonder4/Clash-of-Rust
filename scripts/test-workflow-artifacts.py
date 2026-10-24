@@ -56,7 +56,7 @@ class ArtifactTests(unittest.TestCase):
         header = bytearray(64)
         header[:6] = b'\x7fELF\x02\x01'
         struct.pack_into('<H', header, 18, 62)
-        for path in (payload/'clash-of-rust', payload/'clash-desktop-ui', payload/'clash-tun-launcher', payload/'cor', resources/'mihomo'):
+        for path in (payload/'clash-of-rust', payload/'clash-desktop-ui', payload/'clash-tun-launcher', payload/'cor', payload/'clash-wsl-guardian.exe', resources/'mihomo'):
             path.write_bytes(header)
         (payload/'LICENSE').write_text('fixture license')
         build.write_json(resources/'core.json', {'exe_sha256': build.sha256(resources/'mihomo')})

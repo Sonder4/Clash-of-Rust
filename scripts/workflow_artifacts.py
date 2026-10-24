@@ -1,5 +1,3 @@
-                    'clash-of-rust'+extension, 'clash-desktop-ui'+extension, 'clash-tun-launcher'+extension, 'cor'+extension,
-                    'clash-wsl-guardian.exe', 'mihomo'+extension}
 """Export and verify native CI binaries without rebuilding them during release."""
 import argparse
 import hashlib
@@ -23,7 +21,7 @@ from build_support import (ROOT, WSL_EGRESS_LINUX, WSL_EGRESS_SERVER, WSL_EGRESS
 BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
 BUILD_NAMES |= {f'build-android-{arch}' for arch in ('arm64', 'armv7', 'x64')}
 ARCHIVE_NAME = 'build.tar.gz'
-BUILD_SCHEMA = 3
+BUILD_SCHEMA = 2
 TEST_NAMES = {'core_integration'}
 
 
@@ -74,7 +72,7 @@ def export_build(system, arch, tests, output, binaries=None):
         payload = root/'payload'
         stage_resources(bundle_directory(system, arch)/'resources', payload, system)
         extension = '.exe' if system == 'windows' else ''
-        for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'):
+        for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher'):
             source = (binaries or ROOT/'target/release')/(name+extension)
             validate_binary_arch(source, system, arch)
             shutil.copy2(source, payload/source.name)
@@ -96,6 +94,8 @@ def export_build(system, arch, tests, output, binaries=None):
             if path.is_file():
                 relative = path.relative_to(root).as_posix()
                 executable = relative.startswith('tests/') or path.name in {
+                    'clash-of-rust'+extension, 'clash-desktop-ui'+extension, 'clash-tun-launcher'+extension, 'cor'+extension,
+                    'clash-wsl-guardian.exe', 'mihomo'+extension}
                 records[relative] = {'sha256': sha256(path), 'size': path.stat().st_size,
                                      'executable': executable}
         manifest = {'schema': BUILD_SCHEMA, 'commit': commit(), 'version': package_version(),
@@ -159,7 +159,7 @@ def verify_build(root, system, arch, expected_commit, dependency_snapshot=None):
     records = manifest['files']
     extension = '.exe' if system == 'windows' else ''
     required = {'payload/LICENSE', 'payload/clash-of-rust'+extension,
-                'payload/clash-desktop-ui'+extension, 'payload/clash-tun-launcher'+extension, 'payload/cor'+extension,
+                'payload/clash-desktop-ui'+extension, 'payload/clash-tun-launcher'+extension,
                 'payload/resources/mihomo'+extension,
                 'payload/resources/core.json', 'payload/resources/geodata.json',
                 *(f'payload/resources/{name}' for name in ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'))}
@@ -190,7 +190,7 @@ def verify_build(root, system, arch, expected_commit, dependency_snapshot=None):
         if os.name != 'nt':
             path.chmod(0o755 if record['executable'] else 0o644)
     payload = root/'payload'
-    for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'):
+    for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher'):
         validate_binary_arch(payload/(name+extension), system, arch)
     if system == 'windows':
         validate_binary_arch(payload/'clash-wsl-guardian.exe', system, arch)
