@@ -568,6 +568,9 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:9090/configs' -Headers $h |
 4. **机制**：ICS（SharedAccess）启用的 Windows NAT/转发层吞掉内核**未绑定的 DIRECT 出站**（节点拨号走 auto-detect 绑定不受影响）——完整解释了全程所有症状，包括最早的"只有上行没有下行"。
 5. **最终修复指引**：**使用 TUN 时不要开移动热点/网络共享**；如需两者同时使用，属 Windows ICS 与 mihomo TUN 的真实冲突，值得连同本轮 A/B/C 证据提给 mihomo 上游。VirtNet/TAP/驱动均未卸载（还原点与备份保留作保险）。
 
+
+**补记（2026-10-24 14:50–15:10）**：联网查证两驱动均为第三方非 Windows 自带（VirtNet=ntkernel.com 虚拟网卡工具；TAP=OpenVPN 系客户端组件），经用户授权已用 `pnputil /delete-driver oem23.inf` 与 `oem0.inf` 彻底卸载并验证 CLEAN（"以太网 2"随之消失；备份与还原点保留）。**热点×TUN 共存实验**：先开 TUN 后开热点——热点激活瞬间 DIRECT 拨卡即死（baidu ERR、经节点仍 200），顺序无关，属 Windows ICS NAT 与内核未绑定 DIRECT 出站的硬冲突，配置层无解。替代方案：需要共享网络时用手机自身热点（不经电脑 ICS）或手机 USB 共享给电脑（RNDIS，不涉及 SharedAccess NAT）；二者与 TUN 无冲突。彻底共存需 mihomo 上游处理 ICS 兼容。
+
 ### 12.21 限制
 
 - `Meta` 在 t+60s 消失的触发者未定位（内核 stderr 无持久化日志）。
