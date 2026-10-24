@@ -175,9 +175,12 @@ struct State {
     update_package: Option<core::update::Package>,
     update_status: String,
     update_busy: bool,
+    update_downloading: bool,
     update_progress: f32,
     update_downloaded: bool,
     update_path: PathBuf,
+    update_generation: u64,
+    update_confirmation: Option<core::update::channel::Consent>,
 }
 
 #[unsafe(no_mangle)]
@@ -314,9 +317,12 @@ enum Update {
     Address(u64, String, String),
     Log(String, String),
     Geo(std::result::Result<core::geodata::GeoManifest, String>),
-    Checked(std::result::Result<Option<core::update::Package>, String>),
-    DownloadProgress(u64, u64),
-    Downloaded(std::result::Result<(), String>),
+    Checked(
+        u64,
+        std::result::Result<Option<core::update::Package>, String>,
+    ),
+    DownloadProgress(u64, core::update::Progress),
+    Downloaded(u64, std::result::Result<(), String>),
 }
 async fn run_loop(
     root: PathBuf,
@@ -364,9 +370,12 @@ async fn run_loop(
         update_package: None,
         update_status: "尚未检查更新".into(),
         update_busy: false,
+        update_downloading: false,
         update_progress: 0.0,
         update_downloaded: false,
         update_path,
+        update_generation: 0,
+        update_confirmation: None,
     };
     if let Err(error) = state.session.initialize() {
         state.notice = format!("内核启动失败：{error:#}");
@@ -471,23 +480,44 @@ async fn run_loop(
                     refresh_requested = true;
                 } else if intent==MobileIntent::CheckUpdate {
                     if !state.update_busy {
-                        state.update_busy=true;state.update_status="正在检查更新…".into();state.update_progress=0.0;
+                        state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();state.update_progress=0.0;
                         last_update_check=std::time::Instant::now();
-                        update_job=Some(start_update_check(state.session.settings.mixed_port,updates.clone()));
+                        state.update_generation = state.update_generation.wrapping_add(1);
+                        state.update_confirmation = None;
+                        update_job=Some(start_update_check(state.session.settings.mixed_port,state.session.settings.update_prereleases,state.update_generation,updates.clone()));
                     }
                 } else if intent==MobileIntent::InstallUpdate {
-                    if !state.update_busy && let Some(package)=state.update_package.clone() {
+                    if request.b == "cancel" {
+                        state.update_confirmation = None;
+                    } else if !state.update_busy && let Some(package)=state.update_package.clone() {
+                        if request.b == "prepare" {
+                            if package.preview && state.session.settings.update_prereleases {
+                                state.update_confirmation = Some(core::update::channel::Consent::new(package.version.clone()));
+                            } else {
+                                state.notice = "更新版本已变化，请重新检查更新".into();
+                            }
+                        } else if (package.preview && (!state.session.settings.update_prereleases
+                            || request.b != "confirmed"
+                            || !state.update_confirmation.as_ref().is_some_and(|consent| consent.accepts(&package.version))))
+                            || (!package.preview && !request.b.is_empty()) {
+                            state.notice = "请先阅读预发布风险提示，并等待 3 秒后确认".into();
+                        } else {
+                        state.update_confirmation = None;
                         if state.update_downloaded && state.update_path.is_file() {
                             if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");}
                         } else {
-                            state.update_busy=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
+                            state.update_busy=true;state.update_downloading=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
                             let path=state.update_path.clone();
                             let port=state.session.settings.mixed_port;let send=updates.clone();
+                            let download_api=state.session.api.clone();
+                            state.update_generation = state.update_generation.wrapping_add(1);
+                            let generation = state.update_generation;
                             update_job=Some(tokio::spawn(async move {
                                 let report=send.clone();
-                                let result=core::update::download(&package,Some(port),&path,move|n,total|{let _=report.try_send(Update::DownloadProgress(n,total));}).await;
-                                let _=send.send(Update::Downloaded(result.map_err(|e|format!("{e:#}")))).await;
+                                let result=core::update::download(&package,Some(port),&path,Some(&download_api),move|value|{let _=report.try_send(Update::DownloadProgress(generation,value));}).await;
+                                let _=send.send(Update::Downloaded(generation,result.map_err(|e|format!("{e:#}")))).await;
                             }));
+                        }
                         }
                     }
                 } else if intent == MobileIntent::UpdateGeo {
@@ -684,24 +714,28 @@ async fn run_loop(
                             Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
                         }
                     }
-                    Some(Update::Checked(result))=>{
-                        state.update_busy=false;
+                    Some(Update::Checked(generation,result)) if generation == state.update_generation =>{
+                        state.update_busy=false;state.update_downloading=false;
                         match result {
                             Ok(package)=>{
-                                state.update_status=package.as_ref().map(|p|format!("发现新版本 {} · {:.1} MiB",p.version,p.size as f64/1024.0/1024.0))
-                                    .unwrap_or_else(||"当前没有更新的 Android 正式版".into());
+                                state.update_status=package.as_ref().map(|p|format!("{} · {:.1} MiB",core::update::channel::description(&p.version,p.preview,core::VERSION),p.size as f64/1024.0/1024.0))
+                                    .unwrap_or_else(||"当前更新通道没有可用的 Android 更新".into());
                                 state.update_downloaded=state.update_downloaded && state.update_package.as_ref().map(|p|&p.version)==package.as_ref().map(|p|&p.version);
                                 state.update_package=package;
                             }
                             Err(error)=>state.update_status=error,
                         }
                     }
-                    Some(Update::DownloadProgress(n,total))=>{
-                        state.update_progress=n as f32/total.max(1) as f32;
-                        state.update_status=format!("正在下载更新… {:.0}%",state.update_progress*100.0);
+                    Some(Update::DownloadProgress(generation,value)) if generation == state.update_generation =>{
+                        state.update_progress=value.received as f32/value.total.max(1) as f32;
+                        state.update_status=if value.received==0 {
+                            format!("正在连接下载 · {}",value.routing())
+                        } else {
+                            format!("下载 {}/{} · {}/s · {}",bytes(value.received),bytes(value.total),bytes(value.bytes_per_second),value.routing())
+                        };
                     }
-                    Some(Update::Downloaded(result))=>{
-                        state.update_busy=false;
+                    Some(Update::Downloaded(generation,result)) if generation == state.update_generation =>{
+                        state.update_busy=false;state.update_downloading=false;
                         match result {
                             Ok(())=>{
                                 state.update_downloaded=true;state.update_status="下载完成，请在系统界面确认安装".into();
@@ -715,8 +749,10 @@ async fn run_loop(
             }
             _ = poll.tick() => {
                 if state.session.running && !state.update_busy && last_update_check.elapsed()>=Duration::from_secs(6*60*60) {
-                    last_update_check=std::time::Instant::now();state.update_busy=true;state.update_status="正在检查更新…".into();
-                    update_job=Some(start_update_check(state.session.settings.mixed_port,updates.clone()));
+                    last_update_check=std::time::Instant::now();state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();
+                    state.update_generation = state.update_generation.wrapping_add(1);
+                    state.update_confirmation = None;
+                    update_job=Some(start_update_check(state.session.settings.mixed_port,state.session.settings.update_prereleases,state.update_generation,updates.clone()));
                 }
                 let minutes=state.session.settings.delay_interval_minutes;
                 if state.session.running && state.protection_change.is_none() && minutes>0
@@ -790,9 +826,6 @@ async fn run_loop(
                     .map_err(|error| format!("{error:#}"));
                     let _ = send.send(Update::Snapshot(generation, result)).await;
                 }));
-            }
-            if state.session.vpn {
-                let _ = state.session.native.request(json!({"op":"traffic", "down":format!("{}/s",bytes(state.session.rates.1)), "up":format!("{}/s",bytes(state.session.rates.0))}));
             }
         }
         if log_port != state.session.settings.controller_port {
@@ -910,7 +943,12 @@ async fn run_loop(
     Ok(())
 }
 
-fn start_update_check(port: u16, send: mpsc::Sender<Update>) -> tokio::task::JoinHandle<()> {
+fn start_update_check(
+    port: u16,
+    include_prereleases: bool,
+    generation: u64,
+    send: mpsc::Sender<Update>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let suffix = if cfg!(target_arch = "aarch64") {
             "android-arm64.apk"
@@ -919,9 +957,18 @@ fn start_update_check(port: u16, send: mpsc::Sender<Update>) -> tokio::task::Joi
         } else {
             "android-x64.apk"
         };
-        let result = core::update::check(core::VERSION, suffix, Some(port)).await;
+        let result = core::update::check_with_prereleases(
+            core::VERSION,
+            suffix,
+            Some(port),
+            include_prereleases,
+        )
+        .await;
         let _ = send
-            .send(Update::Checked(result.map_err(|e| format!("{e:#}"))))
+            .send(Update::Checked(
+                generation,
+                result.map_err(|e| format!("{e:#}")),
+            ))
             .await;
     })
 }
@@ -1224,10 +1271,8 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         }
         MobileIntent::SavePorts => {
             ensure!(!session.vpn, "请先断开 VPN，再修改端口");
-            let (mixed, controller) = a.split_once(',').context("端口格式无效")?;
             let mut next = session.settings.clone();
-            next.mixed_port = mixed.parse()?;
-            next.controller_port = controller.parse()?;
+            next.mixed_port = a.parse()?;
             session.commit_settings(next)?;
             state.notice = "端口已保存".into();
         }
@@ -1444,6 +1489,24 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             }
             session.commit_settings(next)?;
         }
+        MobileIntent::UpdatePrereleases => {
+            ensure!(!state.update_busy, "请等待当前更新操作完成");
+            let mut next = session.settings.clone();
+            next.update_prereleases = a == "true";
+            // This is an updater preference; it must not reload the core or VPN.
+            session.store.save_settings(&next)?;
+            session.settings = next;
+            state.update_generation = state.update_generation.wrapping_add(1);
+            state.update_confirmation = None;
+            state.update_package = None;
+            state.update_downloaded = false;
+            state.update_status = "更新通道已更改，请检查更新".into();
+            if let Err(error) = tokio::fs::remove_file(&state.update_path).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                log::warn!("Could not clear the previous update download: {error}");
+            }
+        }
         MobileIntent::TextScale => {} // Android font sizes belong to the OS.
         MobileIntent::Appearance | MobileIntent::Accent => {
             let mut next = session.settings.clone();
@@ -1614,6 +1677,7 @@ fn start_delay(
 struct GroupView {
     name: String,
     group: api::Proxy,
+    expanded: bool,
     nodes: Vec<(String, api::Proxy)>,
     count: usize,
     page: usize,
@@ -1659,8 +1723,12 @@ struct Projection {
     rule_editor: Option<RuleEditor>,
     update_status: String,
     update_busy: bool,
+    update_downloading: bool,
     update_progress: f32,
     update_available: bool,
+    update_preview: bool,
+    update_version: String,
+    update_confirm_wait: i32,
     geo_updating: bool,
     delay_busy: bool,
     site_summary: String,
@@ -1734,12 +1802,18 @@ fn project(state: &State) -> Projection {
         groups.push(GroupView {
             name: name.to_string(),
             group: group.clone(),
+            expanded: s.active_group() == Some(name.as_str()),
             nodes,
             count,
             page,
             testing: matches!(&state.delay_scope,Some(DelayScope::All))
                 || matches!(&state.delay_scope,Some(DelayScope::Group(group)) if group==name.as_str()),
         });
+    }
+    // Show the home page's actual outbound group first, keeping every other
+    // group's relative order. Direct mode has no active proxy group to expand.
+    if let Some(index) = groups.iter().position(|group| group.expanded) {
+        groups[..=index].rotate_right(1);
     }
     let node = s.node.clone();
     let document = if state.page == 4 {
@@ -1887,7 +1961,7 @@ fn project(state: &State) -> Projection {
             let tone = if report.differs(signal) {
                 claude_counts.1 += 1;
                 3
-            } else if signal.evidence == core::claude_check::Evidence::Measured {
+            } else if !signal.context_only() {
                 claude_counts.0 += 1;
                 1
             } else {
@@ -1975,8 +2049,21 @@ fn project(state: &State) -> Projection {
         rule_editor: state.rule_editor.clone(),
         update_status: state.update_status.clone(),
         update_busy: state.update_busy,
+        update_downloading: state.update_downloading,
         update_progress: state.update_progress,
         update_available: state.update_package.is_some(),
+        update_preview: state
+            .update_package
+            .as_ref()
+            .is_some_and(|package| package.preview),
+        update_version: state
+            .update_package
+            .as_ref()
+            .map_or_else(String::new, |package| package.version.clone()),
+        update_confirm_wait: state
+            .update_confirmation
+            .as_ref()
+            .map_or(3, |consent| consent.remaining() as i32),
         geo_updating: state.geo_updating,
         delay_busy: state.delay_scope.is_some(),
         site_summary: format!(
@@ -2018,6 +2105,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         view.set_copy_revision(p.copied.0);
     }
     data.set_working(false);
+    data.set_vpn_pending(p.platform["vpn_pending"].as_bool().unwrap_or(false));
     data.set_geo_updating(p.geo_updating);
     data.set_delay_busy(p.delay_busy);
     data.set_probe_status(p.probe.0.into());
@@ -2037,10 +2125,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         );
         if rules {
             data.set_rule_page(label.into());
+            data.set_rule_page_index(page as i32);
             data.set_rule_previous(page > 0);
             data.set_rule_next((page + 1) * size < count);
         } else {
             data.set_connection_page(label.into());
+            data.set_connection_page_index(page as i32);
             data.set_connection_previous(page > 0);
             data.set_connection_next((page + 1) * size < count);
         }
@@ -2078,8 +2168,13 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     let android = ui.global::<AndroidData>();
     android.set_update_status(p.update_status.into());
     android.set_update_busy(p.update_busy);
+    android.set_update_downloading(p.update_downloading);
     android.set_update_progress(p.update_progress);
     android.set_update_available(p.update_available);
+    data.set_update_prereleases(p.settings.update_prereleases);
+    data.set_update_preview(p.update_preview);
+    data.set_update_version(p.update_version.into());
+    data.set_update_confirm_wait(p.update_confirm_wait);
     android.set_authorization_status(if p.vpn {
         "已连接".into()
     } else {
@@ -2168,7 +2263,6 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_udp(p.settings.udp);
     if !android.get_ports_dirty() {
         data.set_mixed_port(p.settings.mixed_port.to_string().into());
-        data.set_controller_port(p.settings.controller_port.to_string().into());
     }
     if !ui.global::<MobileView>().get_interval_dirty() {
         data.set_interval(p.settings.delay_interval_minutes.to_string().into());
@@ -2239,10 +2333,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     id: profile.id.clone().into(),
                     name: profile.name.into(),
                     source: profile.source.clone().into(),
-                    detail: profile
-                        .usage
-                        .unwrap_or_else(|| format!("更新：{}", profile.updated))
-                        .into(),
+                    detail: if profile.source.is_empty() {
+                        "本地配置".into()
+                    } else {
+                        core::subscription::summary(profile.usage.as_deref(), profile.updated)
+                            .into()
+                    },
                     active: p.settings.active_profile.as_deref() == Some(&profile.id),
                     local: profile.source.is_empty(),
                 })
@@ -2255,11 +2351,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         rows(
             p.groups
                 .into_iter()
-                .enumerate()
-                .map(|(group_index, view)| {
+                .map(|view| {
                     let GroupView {
                         name,
                         group,
+                        expanded,
                         nodes,
                         count,
                         page,
@@ -2283,7 +2379,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                         title: name.into(),
                         detail: format!("{} · {count} 个节点", group.kind).into(),
                         current: group.now.to_string().into(),
-                        expanded: group_index == 0,
+                        expanded,
                         testing,
                         nodes: stable(
                             previous_groups
@@ -2433,6 +2529,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         *snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
+            "vpn_pending":data.get_vpn_pending(),
             "logs":data.get_logs().row_count(),"dark":dark,"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),
             "body_size":typography.invoke_font_size(16),
             "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,

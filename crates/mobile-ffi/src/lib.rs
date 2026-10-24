@@ -200,7 +200,27 @@ impl Session {
         )?)
     }
     pub fn initialize(&mut self) -> Result<()> {
+        let native_running = self.native.request(json!({"op":"state"}))?["running"] == true;
+        let controller = if native_running {
+            None
+        } else {
+            Some(core::config::reserve_controller(
+                self.settings.controller_port,
+                self.settings.mixed_port,
+            )?)
+        };
+        if let Some(listener) = &controller {
+            let port = listener.local_addr()?.port();
+            if port != self.settings.controller_port {
+                let mut settings = self.settings.clone();
+                settings.controller_port = port;
+                self.store.save_settings(&settings)?;
+                self.api = Api::new(&settings)?;
+                self.settings = settings;
+            }
+        }
         let raw = self.runtime(&self.settings)?;
+        drop(controller);
         self.native.request(
             json!({"op":"initialize","config":raw,"ipv6":effective_ipv6(&self.settings)}),
         )?;
@@ -212,7 +232,12 @@ impl Session {
         }
         Ok(())
     }
-    pub fn commit_settings(&mut self, settings: Settings) -> Result<()> {
+    pub fn commit_settings(&mut self, mut settings: Settings) -> Result<()> {
+        if settings.mixed_port == settings.controller_port {
+            settings.controller_port = core::config::reserve_controller(0, settings.mixed_port)?
+                .local_addr()?
+                .port();
+        }
         settings.validate()?;
         let raw = self.runtime(&settings)?;
         let old_raw = self.runtime(&self.settings)?;
@@ -284,6 +309,16 @@ impl Session {
         self.rates = (0, 0);
         self.sampled = None;
         self.connection_sampled = None;
+    }
+    /// The home page represents the default outbound route. Do not infer its
+    /// group from alphabetical order or from a leaf shared by several groups.
+    pub fn active_group(&self) -> Option<&str> {
+        let name = core::active_route::start(&self.settings.run_mode, &self.route);
+        self.proxies
+            .proxies
+            .get(name)
+            .filter(|group| !group.all.is_empty())
+            .map(|_| name)
     }
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) {
         if let Some(proxies) = snapshot.proxies {
@@ -816,6 +851,35 @@ mod tests {
         fn request(&self, _: Value) -> Result<Value> {
             Ok(json!({"ok":true}))
         }
+    }
+    #[test]
+    fn active_group_follows_the_route_and_mode_not_the_first_group_or_shared_leaf() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        session.settings.run_mode = "rule".into();
+        session.route = "Main".into();
+        session.proxies = serde_json::from_value(json!({"proxies": {
+            "AAA unused": {"type":"Selector", "now":"Leaf", "all":["Leaf"]},
+            "GLOBAL": {"type":"Selector", "now":"Main", "all":["Main", "Leaf"]},
+            "Main": {"type":"Selector", "now":"Auto", "all":["Auto", "Leaf"]},
+            "Auto": {"type":"URLTest", "now":"Leaf", "all":["Leaf"]},
+            "Leaf": {"type":"Trojan"}
+        }}))
+        .unwrap();
+        assert_eq!(session.active_group(), Some("Main"));
+        session.settings.run_mode = "global".into();
+        assert_eq!(session.active_group(), Some("GLOBAL"));
+        session.settings.run_mode = "direct".into();
+        assert_eq!(session.active_group(), None);
+        session.settings.run_mode = "rule".into();
+        session.route = "Leaf".into();
+        assert_eq!(session.active_group(), None);
+        session.route = "Missing".into();
+        assert_eq!(session.active_group(), None);
+        session.route = "Main".into();
+        assert_eq!(session.active_group(), Some("Main"));
+        session.clear_snapshot();
+        assert_eq!(session.active_group(), None);
     }
     #[test]
     fn logo_and_guard_notifications_share_a_validated_native_request() {

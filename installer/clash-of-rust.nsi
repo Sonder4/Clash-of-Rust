@@ -1,3 +1,25 @@
+Var UpdateScript
+Var UpdateManifest
+Var UpdateManifestHash
+Var NativePowerShell
+    InitPluginsDir
+    StrCpy $UpdateScript "$PLUGINSDIR\package\resources\wsl-secure-egress\Upgrade-Package.ps1"
+    ; Stage the complete package before touching any installed byte. The
+    ; transaction retains code backups and never uninstalls an active guard.
+    StrCpy $1 "$PLUGINSDIR\package"
+  ${Else}
+    StrCpy $1 "$INSTDIR"
+    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Commit -InstallationPath "$INSTDIR"' $0
+    ${If} $0 != 0
+      Call RestoreUpdate
+      SetErrorLevel 6
+      Abort
+    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Rollback -InstallationPath "$INSTDIR"' $0
+    ${If} $0 == 0
+      StrCpy $UpdateBackup 0
+    ${Else}
+      DetailPrint "Code rollback incomplete. Preserve .package-update and the closed WSL guard for recovery."
+    ${EndIf}
 Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -68,10 +90,6 @@ Var LegacyInstall
 Var KeepAutostart
 Var UpdateMode
 Var UpdateBackup
-Var UpdateScript
-Var UpdateManifest
-Var UpdateManifestHash
-Var NativePowerShell
 Var DeleteUserData
 Var UserDataDir
 Var DataOptionsDialog
@@ -115,6 +133,7 @@ Function .onInit
   StrCpy $KeepAutostart 0
   StrCpy $UpdateMode 0
   StrCpy $UpdateBackup 0
+  StrCpy $UpdateUiBackup 0
   ${GetParameters} $0
   ClearErrors
   ${GetOptions} $0 "/UPDATE" $1
@@ -179,6 +198,10 @@ Function ShutdownExisting
   ${EndIf}
   ; Request normal exit. The GUI restores its proxy and stops its own core.
   ; Never extract/run a second GUI executable or force-kill other processes.
+  IfFileExists "$ExistingDir\cor.exe" 0 no_cli_shutdown
+    nsExec::ExecToLog '"$ExistingDir\cor.exe" --quiet --timeout 15 stop'
+    Pop $0
+  no_cli_shutdown:
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0 ?e'
   Pop $1
   ${If} $0 == 0
@@ -265,13 +288,6 @@ Section "Clash of Rust" MainSection
   !insertmacro CheckRunning install_
   StrCpy $UpdateScript ""
   ${If} $UpdateMode == 1
-    InitPluginsDir
-    StrCpy $UpdateScript "$PLUGINSDIR\package\resources\wsl-secure-egress\Upgrade-Package.ps1"
-    ; Stage the complete package before touching any installed byte. The
-    ; transaction retains code backups and never uninstalls an active guard.
-    StrCpy $1 "$PLUGINSDIR\package"
-  ${Else}
-    StrCpy $1 "$INSTDIR"
   ${EndIf}
   ; Extraction failures must not look like a successful update to the helper.
   SetErrorLevel 6
@@ -280,6 +296,8 @@ Section "Clash of Rust" MainSection
   ClearErrors
   SetOutPath "$1"
   File "${PAYLOAD}\clash-of-rust.exe"
+  File "${PAYLOAD}\clash-desktop-ui.exe"
+  File "${PAYLOAD}\cor.exe"
   File "${PAYLOAD}\clash-tun-launcher.exe"
   File "${PAYLOAD}\clash-wsl-guardian.exe"
   File "${PAYLOAD}\LICENSE"
@@ -362,25 +380,15 @@ Section "Clash of Rust" MainSection
       Call CreateShortcuts
     ${EndIf}
   ${If} $UpdateBackup == 1
-    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Commit -InstallationPath "$INSTDIR"' $0
-    ${If} $0 != 0
-      Call RestoreUpdate
-      SetErrorLevel 6
-      Abort
     ${EndIf}
     StrCpy $UpdateBackup 0
+    StrCpy $UpdateUiBackup 0
   ${EndIf}
   SetErrorLevel 0
 SectionEnd
 
 Function RestoreUpdate
   ${If} $UpdateBackup == 1
-    ExecWait '"$NativePowerShell" -NoLogo -NoProfile -NonInteractive -File "$UpdateScript" -Action Rollback -InstallationPath "$INSTDIR"' $0
-    ${If} $0 == 0
-      StrCpy $UpdateBackup 0
-    ${Else}
-      DetailPrint "Code rollback incomplete. Preserve .package-update and the closed WSL guard for recovery."
-    ${EndIf}
   ${EndIf}
 FunctionEnd
 
@@ -480,6 +488,22 @@ Section "Uninstall"
     ${EndIf}
   wsl_guard_removed:
   ; Delete only files owned by this package. Data deletion requires opt-in.
+  IfFileExists "$INSTDIR\cor.exe" 0 cli_removed
+    nsExec::ExecToLog '"$INSTDIR\cor.exe" --quiet --timeout 30 stop'
+    Pop $0
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "无法停止命令行后台，请先执行 cor stop 后重试卸载。"
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+    nsExec::ExecToLog '"$INSTDIR\cor.exe" --quiet --yes service remove'
+    Pop $0
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "无法清理命令行登录启动任务，请先执行 cor service remove --yes。"
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+  cli_removed:
   IfFileExists "$INSTDIR\clash-tun-launcher.exe" 0 service_removed
     ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-uninstall' $0
     ${If} $0 != 0
@@ -499,6 +523,10 @@ Section "Uninstall"
     ${EndIf}
   ClearErrors
   Delete "$INSTDIR\clash-of-rust.exe"
+  IfErrors uninstall_locked
+  Delete "$INSTDIR\clash-desktop-ui.exe"
+  IfErrors uninstall_locked
+  Delete "$INSTDIR\cor.exe"
   IfErrors uninstall_locked
   Delete "$INSTDIR\clash-tun-launcher.exe"
   IfErrors uninstall_locked

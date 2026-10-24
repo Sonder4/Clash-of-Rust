@@ -1,0 +1,84 @@
+use crate::*;
+pub fn reconcile<T: Clone + PartialEq>(model: &List<T>, rows: Vec<T>) {
+    if !model.with_rows(|old| old == rows.as_slice()) {
+        model.set_vec(rows);
+    }
+}
+#[derive(Default)]
+pub struct ViewModels {
+    pub groups: List<GroupItem>,
+    pub profiles: List<ProfileItem>,
+    pub connections: List<ConnectionItem>,
+    pub rules: List<RuleItem>,
+    pub logs: List<LogItem>,
+    pub categories: List<CategoryPair>,
+    pub site_results: List<ReportItem>,
+    pub claude_results: List<ReportItem>,
+    pub wsl_distributions: List<WslDistributionItem>,
+    pub wsl_checks: List<DetailItem>,
+    pub wsl_logs: List<Text>,
+    wsl_generation: Option<u64>,
+}
+impl ViewModels {
+    pub fn attach(&self, data: &UiData) {
+        data.set_groups(self.groups.clone());
+        data.set_profiles(self.profiles.clone());
+        data.set_connections(self.connections.clone());
+        data.set_rules(self.rules.clone());
+        data.set_logs(self.logs.clone());
+        data.set_categories(self.categories.clone());
+        data.set_site_results(self.site_results.clone());
+        data.set_claude_results(self.claude_results.clone());
+        data.set_wsl_distributions(self.wsl_distributions.clone());
+        data.set_wsl_checks(self.wsl_checks.clone());
+        data.set_wsl_logs(self.wsl_logs.clone());
+    }
+
+    /// Replace all three WSL lists atomically with respect to the generation
+    /// check; stale snapshots are rejected before mutating any row.
+    pub fn set_wsl_results(
+        &mut self,
+        generation: u64,
+        distributions: Vec<WslDistributionItem>,
+        checks: Vec<DetailItem>,
+        logs: Vec<Text>,
+    ) -> bool {
+        if self.wsl_generation.is_some_and(|current| generation < current) {
+            return false;
+        }
+        self.wsl_generation = Some(generation);
+        reconcile(&self.wsl_distributions, distributions);
+        reconcile(&self.wsl_checks, checks);
+        reconcile(&self.wsl_logs, logs);
+        true
+    }
+
+    /// Release hidden rows without allowing a late response to lower generation.
+    pub fn clear_wsl_results(&self) {
+        reconcile(&self.wsl_distributions, Vec::new());
+        reconcile(&self.wsl_checks, Vec::new());
+        reconcile(&self.wsl_logs, Vec::new());
+    }
+    pub fn set_groups(&mut self, groups: Vec<(GroupItem, Vec<NodePair>)>) {
+        reconcile(
+            &self.groups,
+            groups
+                .into_iter()
+                .map(|(mut group, nodes)| {
+                    group.nodes = nodes.into();
+                    group
+                })
+                .collect(),
+        );
+    }
+    pub fn clear(&mut self) {
+        self.groups.set_vec(Vec::new());
+        self.profiles.set_vec(Vec::new());
+        self.connections.set_vec(Vec::new());
+        self.rules.set_vec(Vec::new());
+        self.logs.set_vec(Vec::new());
+        self.categories.set_vec(Vec::new());
+        self.site_results.set_vec(Vec::new());
+        self.claude_results.set_vec(Vec::new());
+    }
+}

@@ -18,6 +18,14 @@ import static org.junit.Assert.*;
 /** Uses the packaged Slint Activity, embedded core and the real Android VPN. */
 @RunWith(AndroidJUnit4.class)
 public class ProxyTunTest {
+    @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() {
+        String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true);
+        assertTrue(text.contains("全局 · Current node"));
+        assertTrue(text.contains("↓ 1 MiB/s"));
+        text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Other node", "rule", false);
+        assertEquals("规则 · Other node", text);
+        assertEquals("直连 · DIRECT", TunnelService.statusText("", "", "DIRECT", "direct", false));
+    }
     private static void pointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
         event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
@@ -56,6 +64,7 @@ public class ProxyTunTest {
         });
     }
     private static void verifyPresentation() throws Exception {
+        new ProxyTunTest().notificationShowsModeAndNodeWithOptionalSpeeds();
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
         JSONObject initial=MainActivity.diagnostics();
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -243,6 +252,61 @@ public class ProxyTunTest {
         activity.request("{\"op\":\"authorize-vpn\",\"request\":104}");
         authorization(104,"granted");
         assertFalse(TunnelService.connected());
+
+        // Ordinary VPN consent has a separate path from protection consent.
+        // Disconnect must cancel it even before a TunnelService exists.
+        shell("appops set org.clashofrust.android ACTIVATE_VPN default");
+        assertNotNull(VpnService.prepare(context));
+        activity.request("{\"op\":\"connect\"}");
+        await("Ordinary VPN consent did not open",()-> {
+            android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation().getRootInActiveWindow();
+            return root!=null && "com.android.vpndialogs".contentEquals(root.getPackageName());
+        });
+        activity.request("{\"op\":\"disconnect\"}");
+        consent(true);
+        await("Cancelled ordinary consent did not return",()->VpnService.prepare(context)==null
+            && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        assertStaysDisconnected(context,"Late ordinary consent reopened the VPN");
+        assertEquals(original,CoreBridge.config());
+
+        // Model a service start that was queued before the user disconnected.
+        String stale=TunnelService.prepareStart(context);
+        TunnelService.stop(context);
+        context.startForegroundService(new Intent(context,TunnelService.class).putExtra(TunnelService.REQUEST,stale));
+        assertStaysDisconnected(context,"A stale service start reopened the VPN");
+
+        // Hold the lifecycle queue so Disconnect definitely arrives before a
+        // previously accepted connect begins. Releasing it must not create TUN.
+        java.lang.reflect.Field field=TunnelService.class.getDeclaredField("serial");
+        field.setAccessible(true);
+        java.util.concurrent.ExecutorService serial=(java.util.concurrent.ExecutorService)field.get(null);
+        java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release=new java.util.concurrent.CountDownLatch(1);
+        long generation=TunnelService.generation();
+        serial.execute(()-> {
+            entered.countDown();
+            try {release.await(10,java.util.concurrent.TimeUnit.SECONDS);}
+            catch (InterruptedException error) {Thread.currentThread().interrupt();}
+        });
+        try {
+            assertTrue(entered.await(5,java.util.concurrent.TimeUnit.SECONDS));
+            TunnelService.start(context,false);
+            await("Queued VPN start was not accepted",TunnelService::pending);
+            await("Slint did not expose cancellation for the pending VPN",()->MainActivity.diagnostics().optBoolean("vpn_pending"));
+            TunnelService.stop(context);
+        } finally {release.countDown();}
+        assertStaysDisconnected(context,"A cancelled lifecycle job reopened the VPN");
+        assertEquals("A cancelled lifecycle job established a TUN",generation,TunnelService.generation());
+    }
+    private static void assertStaysDisconnected(Context context,String message) throws Exception {
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        do {
+            assertFalse(message,TunnelService.connected());
+            assertFalse(message,context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",false));
+            assertFalse(message,vpnActive(context.getSystemService(ConnectivityManager.class)));
+            SystemClock.sleep(50);
+        } while (System.nanoTime()<deadline);
     }
     private static void tunCarriesSocket(String controller,String secret) throws Exception {
         // NetworkCallbacks describe the control plane. A just-replaced VPN can
@@ -261,9 +325,25 @@ public class ProxyTunTest {
         ConnectivityManager manager=InstrumentationRegistry.getInstrumentation().getTargetContext()
             .getSystemService(ConnectivityManager.class);
         Network current=manager.getActiveNetwork();
-        return "active="+current+"; capabilities="+manager.getNetworkCapabilities(current)
+        StringBuilder details=new StringBuilder("active="+current+"; capabilities="+manager.getNetworkCapabilities(current)
             +"; links="+manager.getLinkProperties(current)+"; VPN="+TunnelService.connected()
-            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error();
+            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error());
+        // Capture the data plane too: a VPN capability alone cannot establish
+        // whether packets reached the device or its native reader still owns it.
+        for (String command:new String[]{"ip -s link show","ip rule show","ip route show table all"}) {
+            try {details.append('\n').append(command).append('\n').append(shell(command));}
+            catch (Exception error) {details.append(" diagnostics unavailable: ").append(error);}
+        }
+        try (java.nio.file.DirectoryStream<java.nio.file.Path> files=java.nio.file.Files.newDirectoryStream(
+                java.nio.file.Paths.get("/proc/self/fdinfo"))) {
+            for (java.nio.file.Path file:files) {
+                try {
+                    String info=new String(java.nio.file.Files.readAllBytes(file),StandardCharsets.UTF_8);
+                    if (info.contains("iff:")) details.append("\nTUN fd ").append(file.getFileName()).append('\n').append(info);
+                } catch (IOException closed) { /* Descriptors can retire during enumeration. */ }
+            }
+        } catch (IOException error) {details.append(" fd diagnostics unavailable: ").append(error);}
+        return details.toString();
     }
     private static void awaitDirectRecovery(ConnectivityManager manager) throws Exception {
         long deadline=SystemClock.elapsedRealtime()+15000;
@@ -354,7 +434,7 @@ public class ProxyTunTest {
             +"rules:\n  - IP-CIDR,198.51.100.1/32,CI-TUN-origin,no-resolve\n  - MATCH,DIRECT\n");
         shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
         for (int cycle=0; cycle<2; cycle++) {
-            if (cycle==0) context.startForegroundService(new Intent(context,TunnelService.class));
+            if (cycle==0) TunnelService.start(context,false);
             else shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("VPN did not connect; inspect logcat", () -> {
                 if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
@@ -374,7 +454,6 @@ public class ProxyTunTest {
                 assertEquals("cor-android-network-ok", read(new URL("http://android-tun.test:18081/probe"),java.net.Proxy.NO_PROXY,null));
                 shell("am start -W -n org.clashofrust.android/.MainActivity");
                 await("VPN Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
-                long previousGeneration = TunnelService.generation();
                 java.util.concurrent.atomic.AtomicBoolean monitoring=new java.util.concurrent.atomic.AtomicBoolean(true);
                 java.util.concurrent.atomic.AtomicBoolean bypassed=new java.util.concurrent.atomic.AtomicBoolean();
                 java.util.concurrent.atomic.AtomicReference<Throwable> samplingError=new java.util.concurrent.atomic.AtomicReference<>();
@@ -391,10 +470,13 @@ public class ProxyTunTest {
                 },"vpn-route-check");
                 routes.setDaemon(true); routes.start();
                 try {
-                    context.startForegroundService(new Intent(context,TunnelService.class).setAction(TunnelService.RECONFIGURE));
-                    await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
-                    await("Android did not restore VPN routing after reconfigure",()->vpnActive(connectivity));
-                    tunCarriesSocket(controller,secret);
+                    for (int handover=0;handover<5;handover++) {
+                        long previousGeneration = TunnelService.generation();
+                        TunnelService.start(context,true);
+                        await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
+                        await("Android did not restore VPN routing after reconfigure",()->vpnActive(connectivity));
+                        tunCarriesSocket(controller,secret);
+                    }
                 } finally { monitoring.set(false); routes.join(1000); }
                 assertFalse("VPN route monitor did not finish",routes.isAlive());
                 assertNull("Could not monitor VPN handover: "+samplingError.get(),samplingError.get());
@@ -442,6 +524,17 @@ public class ProxyTunTest {
                 return TunnelService.connected();
             });
             assertTrue(CoreBridge.ready());
+            if (Build.VERSION.SDK_INT >= 33)
+                shell("pm grant org.clashofrust.android android.permission.POST_NOTIFICATIONS");
+            await("Cold VPN notification did not show its actual mode and node", () ->
+                vpnNotification(context).contains("规则 · DIRECT"));
+            context.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().putBoolean("notification-speeds", false).commit();
+            await("Hiding speeds also hid the VPN node or mode", () -> {
+                String text = vpnNotification(context);
+                return text.contains("规则 · DIRECT") && !text.contains("↓");
+            });
+            context.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().putBoolean("notification-speeds", true).commit();
+            await("Cold VPN notification did not restore speed display", () -> vpnNotification(context).contains("↓"));
             shell("cmd statusbar expand-settings");
             await("Quick tile did not display its connected state",()->tileState()==android.service.quicksettings.Tile.STATE_ACTIVE);
             assertFalse("Quick tile opened the Activity",inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
@@ -451,6 +544,7 @@ public class ProxyTunTest {
             tunCarriesSocket(value(raw,"external-controller"),value(raw,"secret"));
             shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("Cold tile did not disconnect",()->!TunnelService.connected());
+            await("VPN notification remained after disconnect", () -> vpnNotification(context).isEmpty());
             await("Quick tile remained visually enabled after disconnect",()->tileState()==android.service.quicksettings.Tile.STATE_INACTIVE);
             noTunRoute();
             assertFalse(inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
@@ -461,6 +555,17 @@ public class ProxyTunTest {
                 finally { TunnelService.stop(context); }
             }
         }
+    }
+    private static String vpnNotification(Context context) {
+        android.app.NotificationManager manager = context.getSystemService(android.app.NotificationManager.class);
+        for (android.service.notification.StatusBarNotification entry : manager.getActiveNotifications()) {
+            if (entry.getId() == 1) {
+                CharSequence text = entry.getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
+                CharSequence title = entry.getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TITLE);
+                return (title == null ? "" : title.toString()) + "\n" + (text == null ? "" : text.toString());
+            }
+        }
+        return "";
     }
     private static void quickTiles(Context context,String value) {
         if (Build.VERSION.SDK_INT<29) throw new AssertionError("Tile UI regression requires Android 10+");

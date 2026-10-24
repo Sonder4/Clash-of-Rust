@@ -1,7 +1,7 @@
 //! Native WSL control surface. Effects run on the worker, never the UI thread.
 use super::*;
 use clash_client_core::wsl::{self as contract, Backend, Operation, Report, WslSettings};
-use clash_client_ui::{DetailItem, UiData, WslDistributionItem, models::ViewModels};
+use clash_desktop_protocol::{DetailItem, UiData, WslDistributionItem, models::ViewModels};
 
 #[cfg(any(windows, test))]
 mod payload;
@@ -1078,7 +1078,7 @@ impl App {
         )
     }
 
-    pub(super) fn present_wsl(&self, data: &UiData<'_>, models: &mut ViewModels) {
+    pub(super) fn present_wsl(&self, data: &UiData, models: &mut ViewModels) {
         let state = &self.wsl;
         data.set_wsl_supported(cfg!(windows));
         data.set_wsl_busy(state.controls_busy());

@@ -7,6 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod dns;
+pub use dns::DEFAULT_DNS_NAMESERVERS;
+mod ports;
+pub use ports::reserve_controller;
+
 pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOSITE,category-ads-all,REJECT",
     "GEOSITE,private,DIRECT",
@@ -72,6 +77,7 @@ pub struct Settings {
     pub accent_color: AccentColor,
     pub text_scale: u16,
     pub tray_speed: bool,
+    pub update_prereleases: bool,
     pub dns_override: bool,
     pub ipv6: bool,
     pub udp: bool,
@@ -111,6 +117,7 @@ impl Default for Settings {
             accent_color: AccentColor::default(),
             text_scale: 100,
             tray_speed: false,
+            update_prereleases: false,
             dns_override: true,
             ipv6: true,
             udp: true,
@@ -432,8 +439,29 @@ pub fn runtime_config_with_rules(
         .or_insert(serde_yaml::to_value(["any:53"])?);
     map.insert(Value::from("tun"), Value::Mapping(tun));
     apply_sniffer(&mut map)?;
-    apply_dns(&mut map, settings)?;
+    let managed_dns = dns::apply(&mut map, settings)?;
+    // Excludes must be derived after dns::apply installs the effective
+    // nameservers, and before protection may strip them again.
+    if let Some(Value::Mapping(mut tun)) = map.remove(Value::from("tun")) {
+        apply_tun_route_excludes(&mut tun, &map)?;
+        map.insert(Value::from("tun"), Value::Mapping(tun));
+    }
     crate::claude_check::protection::apply(&mut map, settings)?;
+    if managed_dns || settings.claude_protection.is_some() {
+        // Run after protection as well: its macOS DNS overlay must not erase
+        // compatibility exceptions or reinterpret a subscription whitelist.
+        let extra: &[&str] = if cfg!(target_os = "macos")
+            && settings
+                .claude_protection
+                .as_ref()
+                .is_some_and(|protection| !protection.system_dns.is_empty())
+        {
+            &["+.bash.ws"]
+        } else {
+            &[]
+        };
+        dns::fake_ip_exceptions(&mut map, extra)?;
+    }
     apply_udp(
         &mut map,
         settings.udp || settings.claude_protection.is_some(),
@@ -443,6 +471,97 @@ pub fn runtime_config_with_rules(
 
 /// Learn unknown HTTP/SNI/QUIC hostnames without rewriting established destinations.
 /// Keep subscription port/skip choices; protection applies its stricter policy later.
+
+/// Windows TUN captures the core's own outbound unless the destination is
+/// explicitly excluded (route-exclude-address is the only mechanism that
+/// works there; interface binding does not exempt the DNS dialer or DIRECT
+/// dials - observed 2026-10-24). Keep the escape hatches maintenance-free by
+/// deriving them from the configuration itself: every literal proxy-server
+/// address, every literal DNS endpoint, and the local ranges never enter
+/// the TUN. User-provided excludes are preserved verbatim.
+fn apply_tun_route_excludes(tun: &mut Mapping, map: &Mapping) -> Result<()> {
+    let mut excludes: Vec<Value> = match tun.get(Value::from("route-exclude-address")) {
+        Some(Value::Sequence(list)) => list.clone(),
+        _ => Vec::new(),
+    };
+    let push_literal = |text: &str, excludes: &mut Vec<Value>| {
+        let Some((host, width)) = literal_address(text) else {
+            return;
+        };
+        let entry = Value::from(format!("{host}/{width}"));
+        if !excludes.contains(&entry) {
+            excludes.push(entry);
+        }
+    };
+    if let Some(Value::Sequence(proxies)) = map.get(Value::from("proxies")) {
+        for proxy in proxies {
+            if let Some(server) = proxy
+                .as_mapping()
+                .and_then(|m| m.get(Value::from("server")))
+                .and_then(Value::as_str)
+            {
+                push_literal(server, &mut excludes);
+            }
+        }
+    }
+    if let Some(Value::Mapping(dns)) = map.get(Value::from("dns")) {
+        for key in ["nameserver", "default-nameserver", "proxy-server-nameserver"] {
+            if let Some(Value::Sequence(servers)) = dns.get(Value::from(key)) {
+                for server in servers {
+                    if let Some(text) = server.as_str() {
+                        push_literal(text, &mut excludes);
+                    }
+                }
+            }
+        }
+    }
+    for local in [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "224.0.0.0/4",
+        "fe80::/10",
+        "fc00::/7",
+        "::1/128",
+    ] {
+        let entry = Value::from(local);
+        if !excludes.contains(&entry) {
+            excludes.push(entry);
+        }
+    }
+    if !excludes.is_empty() {
+        tun.insert(Value::from("route-exclude-address"), Value::Sequence(excludes));
+    }
+    Ok(())
+}
+
+/// Extract a literal IP host (IPv4 -> /32, IPv6 -> /128) from a proxy server
+/// or DNS endpoint, ignoring ports, URL schemes and domain names.
+fn literal_address(text: &str) -> Option<(String, u8)> {
+    let trimmed = text.trim();
+    let candidate = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .or_else(|| trimmed.strip_prefix("tls://"))
+        .or_else(|| trimmed.strip_prefix("udp://"))
+        .unwrap_or(trimmed);
+    let candidate = candidate.split(['/']).next()?;
+    let host = if let Some(rest) = candidate.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else if candidate.matches(':').count() > 1 {
+        candidate
+    } else {
+        candidate.split(':').next().unwrap_or(candidate)
+    };
+    let address: std::net::IpAddr = host.parse().ok()?;
+    match address {
+        std::net::IpAddr::V4(_) => Some((host.to_owned(), 32)),
+        std::net::IpAddr::V6(_) => Some((host.to_owned(), 128)),
+    }
+}
+
 fn apply_sniffer(map: &mut Mapping) -> Result<()> {
     // Mutate in place: Mapping::remove uses swap removal. A new root key
     // between tun and dns otherwise changes their order on every regeneration.
@@ -545,35 +664,6 @@ fn apply_udp(map: &mut Mapping, enabled: bool) -> Result<()> {
     Ok(())
 }
 
-/// Shared fallback used when a host needs DNS but the subscription provides none.
-pub const DEFAULT_DNS_NAMESERVERS: [&str; 2] = [
-    "https://doh.pub/dns-query",
-    "https://dns.alidns.com/dns-query",
-];
-
-fn apply_dns(map: &mut Mapping, settings: &Settings) -> Result<()> {
-    let mut dns = match map.remove(Value::from("dns")) {
-        None | Some(Value::Null) => Mapping::new(),
-        Some(Value::Mapping(dns)) => dns,
-        _ => bail!("订阅 dns 必须是配置对象"),
-    };
-    // FlClash's baseline owns these three fields, leaving provider-specific
-    // resolution policies, filters, hosts and listener settings intact.
-    if settings.dns_override || dns.is_empty() {
-        dns.insert(Value::from("enable"), Value::from(true));
-        dns.insert(Value::from("enhanced-mode"), Value::from("fake-ip"));
-        dns.insert(
-            Value::from("nameserver"),
-            serde_yaml::to_value(DEFAULT_DNS_NAMESERVERS)?,
-        );
-    }
-    // The IPv6 preference is independent of DNS override and authoritative
-    // for both the core's outbound support and its DNS AAAA responses.
-    dns.insert(Value::from("ipv6"), Value::from(settings.ipv6));
-    map.insert(Value::from("dns"), Value::Mapping(dns));
-    Ok(())
-}
-
 fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
     if !overrides.enabled.iter().any(|enabled| *enabled) {
         return Ok(());
@@ -614,6 +704,21 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn existing_settings_keep_stable_updates_and_channel_choice_survives_reload() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.update_prereleases);
+        let root = tempfile::tempdir().unwrap();
+        let store = Store {
+            root: root.path().to_owned(),
+        };
+        let selected = Settings {
+            update_prereleases: true,
+            ..settings
+        };
+        store.save_settings(&selected).unwrap();
+        assert!(store.load_settings().unwrap().update_prereleases);
+    }
     #[test]
     fn data_directory_is_exclusive() {
         let tmp = tempfile::tempdir().unwrap();
@@ -868,10 +973,16 @@ mod tests {
                     expected["enable"] = Value::from(true);
                     expected["enhanced-mode"] = Value::from("fake-ip");
                     expected["nameserver"] = serde_yaml::to_value([
-                        "https://doh.pub/dns-query",
-                        "https://dns.alidns.com/dns-query",
+                        "https://223.5.5.5/dns-query",
+                        "https://120.53.53.53/dns-query",
                     ])
                     .unwrap();
+                    let filters = expected["fake-ip-filter"].as_sequence_mut().unwrap();
+                    for domain in dns::REAL_IP_DOMAINS {
+                        if !filters.contains(&Value::from(*domain)) {
+                            filters.push(Value::from(*domain));
+                        }
+                    }
                 }
                 assert_eq!(result["dns"], expected);
                 // Applying the same settings again must not grow or erase DNS fields.
@@ -882,6 +993,23 @@ mod tests {
                 assert_eq!(reapplied, result);
             }
         }
+    }
+
+    #[test]
+    fn disabled_dns_override_preserves_even_a_fake_ip_whitelist() {
+        let raw = "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9], fake-ip-filter-mode: whitelist, fake-ip-filter: ['*']}\n";
+        let settings = Settings {
+            dns_override: false,
+            ..Settings::default()
+        };
+        let result: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert_eq!(result["dns"]["fake-ip-filter-mode"], "whitelist");
+        assert_eq!(
+            result["dns"]["fake-ip-filter"],
+            serde_yaml::to_value(["*"]).unwrap()
+        );
+        assert_eq!(result["dns"]["nameserver"][0], "9.9.9.9");
+        assert!(result["rule-providers"].is_null());
     }
 
     #[test]
