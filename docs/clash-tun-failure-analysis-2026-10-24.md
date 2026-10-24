@@ -625,7 +625,21 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:9090/configs' -Headers $h |
 | 完整共存（国内全通） | 无配置解（strict-route 与 ICS 官方互斥；chnroute 全表已否决） | 待 mihomo 上游修复（证据链就绪） |
 | 接受降级 | 热点+TUN 并存使用 | 国内全断、国外不稳、VPS 吞吐 -58%~-74% |
 
-### 12.23 限制
+### 12.23 绑定出站路线终验与"完整共存"结论（2026-10-24 17:00–17:30）
+
+**实验**：定义 `type: direct, interface-name: WLAN` 的绑定直连出站（SYS-DIRECT），okinto 规则指向它、DNS 服务器以 `#SYS-DIRECT` 指定经该出站查询，在热点+TUN 下测试。
+
+**结果**：cloudflare/bing（经节点）200——**新域名 DNS 解析也成功**（DNS 经绑定出站查询有效或至少未劣化）；但 **okinto（绑定直连出站）双轮 ERR**——`type: direct` 出站的 interface-name 绑定**不能**穿越 ICS。
+
+**结论（配置层已穷尽）**：穿越 ICS 的唯一拨号方式是**代理拨号器所用的绑定机制**（auto-detect，伴随日志 `Auto detect interface --> WLAN`）；普通 interface-name 绑定（全局或 direct 出站）都不行。至此验证过的共存手段全部归档：IP 排除路由（有效但仅限清单内）、IP 式 DoH（有效，仅 DNS）、`#出站` DNS（有效，仅 DNS）、direct 出站绑定（无效）、strict-route（无法应用且官方与 ICS 互斥）、顺序（无效）。
+
+**"完整共存"的唯一路径 = 修改 mihomo（Go 内核）**：让 DNS 模块与 DIRECT 拨号器复用代理拨号器的接口绑定实现（或在 WFP 层加按进程的自身豁免过滤器并保证优先级高于 ICS 注入的规则）。仅改 Clash-of-Rust（Rust 应用层）无法根治——拨号行为在内核里；Rust 侧能做的是自动化部分缓解配方（热点的检测告警、AI 端点排除配方的生成与维护）。附带结论：mihomo 修复后，路由表式 TUN（无排除时的默认路由模式）将天然捕获**转发的热点客户端流量**，手机经电脑热点全流量经 VPS 的需求即同时解决。
+
+**当前手机经热点走 VPS 的可用路径（无需等上游）**：
+1. 手机连热点后在 WiFi 设置里配代理指向 `192.168.137.1:17890`——需应用开放 LAN 监听（当前生成器强制 `allow-lan: false` + 绑定 127.0.0.1；一行生成器改动即可支持"仅热点网段监听"，属 Rust 侧可做的小改动）；覆盖浏览器/多数应用的 TCP 流量，非 UDP 全量。
+2. 手机直接运行自己的代理客户端连 VPS（不经过电脑，零冲突全流量）。
+
+### 12.24 限制
 
 - `Meta` 在 t+60s 消失的触发者未定位（内核 stderr 无持久化日志）。
 - 未抓包；回环结论由内核 `reject loopback` 日志（内核自身承认）、路由表实测、SynSent/Established 分布三方支撑，为当前可达的最强证据等级。
