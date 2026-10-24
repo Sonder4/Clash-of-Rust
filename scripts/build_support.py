@@ -179,6 +179,9 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def opener(proxy=''):
+    # CLI --proxy wins; CLASH_BUILD_PROXY lets metadata resolution (which has no
+    # proxy flag) run behind the same local proxy on restricted networks.
+    proxy = proxy or os.environ.get('CLASH_BUILD_PROXY', '')
     return urllib.request.build_opener(urllib.request.ProxyHandler({'http': proxy, 'https': proxy} if proxy else {}), SafeRedirect())
 
 

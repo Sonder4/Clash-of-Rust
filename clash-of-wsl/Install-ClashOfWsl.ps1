@@ -20,6 +20,7 @@
 param(
     [string]$SourceRoot,
     [string]$GuardianExe,
+    [string]$PackageRoot,
     [switch]$Uninstall,
     [switch]$RestoreOriginalNetwork,
     [switch]$Execute,
@@ -30,9 +31,16 @@ $ErrorActionPreference = 'Stop'
 
 function Test-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $high = @($identity.Groups | Where-Object { $_.Value -match '^S-1-16-(12288|1688)$' }).Count -gt 0
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    return ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -and $high)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { return $false }
+    $high = @($identity.Groups | Where-Object { $_.Value -match '^S-1-16-(12288|1688)$' }).Count -gt 0
+    if ($high) { return $true }
+    # Some hosts do not enumerate the integrity SID through WindowsIdentity.
+    # whoami /groups reports the mandatory label for the same token, so a UAC
+    # elevated PowerShell is still recognised instead of failing the run.
+    try {
+        return ((& whoami.exe /groups 2>$null | Out-String) -match 'S-1-16-(12288|1688)')
+    } catch { return $false }
 }
 
 function ConvertTo-WindowsCommandLineArgument([string]$Value) {
@@ -68,6 +76,7 @@ function Enter-AdminProcess {
     )
     if ($SourceRoot) { $args += @('-SourceRoot', $SourceRoot) }
     if ($GuardianExe) { $args += @('-GuardianExe', $GuardianExe) }
+    if ($PackageRoot) { $args += @('-PackageRoot', $PackageRoot) }
     if ($Uninstall) { $args += '-Uninstall' }
     if ($RestoreOriginalNetwork) { $args += '-RestoreOriginalNetwork' }
     $commandLine = ($args | ForEach-Object {
@@ -83,7 +92,11 @@ if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
 }
 $SourceRoot = [IO.Path]::GetFullPath($SourceRoot)
 
-$InstallRoot = Join-Path $env:ProgramFiles 'Clash of Rust WSL'
+$InstallRoot = if ([string]::IsNullOrWhiteSpace($PackageRoot)) {
+    Join-Path $env:ProgramFiles 'Clash of Rust WSL'
+} else {
+    [IO.Path]::GetFullPath($PackageRoot)
+}
 $ServiceName = 'ClashOfRust.WslEgress'
 $Guardian = Join-Path $InstallRoot 'clash-wsl-guardian.exe'
 

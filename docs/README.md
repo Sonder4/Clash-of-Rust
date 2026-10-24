@@ -15,6 +15,8 @@ Clash of Rust 客户端与 **WSL Secure Egress / Clash of WSL** 分支工作。
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
 | [完整过程文档](PROJECT_PROCESS_2026-10.md) | 需求、计划、实施、验证与未完成项的总过程线 | 现行 |
+| [用户原始需求汇编](user-requirements-compilation-2026-10-24.md) | Claude Code / Codex 会话中用户原始输入，按会话与时间整理 | 现行 |
+| [优化与设计方案](optimization-and-design-2026-10-24.md) | Clash of Rust 整改、Chrome / Claude Code 流量、Clash of WSL 设计需求 | 现行 |
 | [本机配置交接](local-network-handoff-2026-10-15.md) | 本机网络、Clash、WSL、VPS 与回退记录 | 现行 |
 | [WSL Secure Egress 产品文档](wsl-secure-egress/README.md) | 功能定位、状态、文档入口 | 现行 |
 | [本机运维脚本索引](../scripts/wsl-secure-egress/local-ops/README.md) | 迁移、自动恢复、诊断脚本的用途与回退 | 现行 |
@@ -78,6 +80,8 @@ Clash of Rust 客户端与 **WSL Secure Egress / Clash of WSL** 分支工作。
 | [2026-10-22 代码审查](wsl-secure-egress/CODE_REVIEW_2026-10-22.md) | 代码级审查记录 | 历史 |
 | [2026-10-18 PR #2 审查](wsl-secure-egress/PR_REVIEW_2026-10-18.md) | PR 审查与修复 | 历史 |
 | [2026-10-23 Ubuntu-22.04 清理方案](wsl-secure-egress/ubuntu22-cleanup-plan-2026-10-23.md) | 空间清理方案与 2026-10-24 执行记录 | 现行（已执行） |
+| [Clash TUN 无法使用与 9090 端口错误分析](clash-tun-failure-analysis-2026-10-24.md) | 2026-10-24 TUN 已开但转发失败、9090 重启冲突、应用状态不同步的只读诊断 | 现行（诊断记录） |
+| [2026-10-24 系统网络配置审计](system-network-audit-2026-10-24.md) | 主机网络、防火墙、依赖、Tailscale、WSL 与 TUN 复现的只读核查 | 现行（审计快照） |
 
 ## 6. 本机网络、VPS 与 AI 域名专项
 

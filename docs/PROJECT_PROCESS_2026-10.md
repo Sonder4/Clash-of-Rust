@@ -351,6 +351,13 @@ cargo test -p clash-client-core wsl::tests --locked --offline
 9. **历史文档含真实地址**：若需脱敏，应单独处理并注意 Git 历史仍保留旧值。
 10. **未执行项**：主机重启、网卡切换、休眠恢复、WFP 隔离探测、live acceptance、
     fail-closed acceptance、浏览器/Claude Desktop 完整验收。
+11. **Clash TUN 失败与 9090 重启冲突（2026-10-24）**：TUN live 已开启但直连与 17890
+    代理均 TLS 失败，疑似 TUN 默认路由回环或旧 `strict-route=true`；应用重启时 9090
+    端口释放时序导致 `os error 10048`。02:16 快照时内核未运行、TUN 关闭；02:24
+    后续复现见第 12 条。详见 [分析文档](clash-tun-failure-analysis-2026-10-24.md)。
+12. **2026-10-24 02:24 TUN 复现**：TUN 再次开启后，核心出现 7 条发往 IPv6 10443 的
+    `SynSent`，关键地址直连/代理失败；02:29 已切回系统代理，TUN 关闭后关键地址恢复
+    302/200。详见 [系统网络审计](system-network-audit-2026-10-24.md) §6。
 
 ## 10. 运维与回退入口
 

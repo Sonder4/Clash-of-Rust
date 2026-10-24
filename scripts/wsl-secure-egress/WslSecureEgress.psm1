@@ -875,14 +875,48 @@ function Complete-WslEgressGenerationCutover {
 
 function Get-WslEgressGuardianServiceCommand([string]$Binary) { '"' + $Binary + '" --service' }
 
+function Get-WslEgressProtectedRoots {
+    # Canonical installation roots for the guardian and its payload. Program
+    # Files is always accepted. A relocated installation contributes the root
+    # that holds its own package (for example D:\Clash for
+    # D:\Clash\Clash of Rust WSL), but only when that root is owned by the
+    # trusted accounts, so a user-writable directory with a matching name is
+    # never treated as protected.
+    $roots = New-Object System.Collections.Generic.List[string]
+    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    if ($programFiles) {
+        $normalized = [IO.Path]::GetFullPath($programFiles).TrimEnd('\')
+        if (-not $roots.Contains($normalized)) { $roots.Add($normalized) }
+    }
+    try {
+        $package = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $leaf = Split-Path -Leaf $package
+        if ($leaf -in @('Clash of Rust', 'Clash of Rust WSL')) {
+            $base = [IO.Path]::GetFullPath((Split-Path -Parent $package)).TrimEnd('\')
+            $owner = ''
+            try { $owner = [string](Get-Acl -LiteralPath $base).Owner } catch { $owner = '' }
+            if ($owner -match 'Administrators|SYSTEM|S-1-5-32-544|S-1-5-18' -and -not $roots.Contains($base)) {
+                $roots.Add($base)
+            }
+        }
+    } catch { }
+    return $roots
+}
+
+function Test-WslEgressProtectedPath([string]$Path) {
+    foreach ($root in Get-WslEgressProtectedRoots) {
+        if ($Path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
 function Get-WslEgressGuardianPackageBinary {
     # The service image must come from the protected package that ships next to
     # this module; a checkout, user directory or junction is never acceptable.
     $binary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../clash-wsl-guardian.exe'))
     if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'The packaged WSL guardian binary is missing.' }
-    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
-    if (-not $binary.StartsWith($programFiles.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'A service may only be installed from the protected Program Files package.'
+    if (-not (Test-WslEgressProtectedPath $binary)) {
+        throw 'A service may only be installed from a protected installation package.'
     }
     $binary
 }
@@ -930,16 +964,17 @@ function Install-WslEgressGuardian([object]$State) {
 function Test-WslEgressGuardianServicePath([string]$PathName) {
     # The guardian service may only run from a protected package directory. The
     # reviewed helper package normally installs it, but an application package
-    # installed under Program Files is equally canonical. Accept exactly those
-    # two locations so a foreign or relocated service is never removed.
-    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
-    if (-not $programFiles) { return $false }
+    # installed under a protected root is equally canonical. Accept exactly
+    # those two names under each known root so a foreign service is never
+    # removed.
     $match = [regex]::Match([string]$PathName, '^"([^"]+)" --service$')
     if (-not $match.Success) { return $false }
     try { $binary = [IO.Path]::GetFullPath($match.Groups[1].Value) } catch { return $false }
-    foreach ($root in @('Clash of Rust WSL', 'Clash of Rust')) {
-        $expected = [IO.Path]::GetFullPath((Join-Path $programFiles ($root + '\clash-wsl-guardian.exe')))
-        if ($binary -ieq $expected) { return $true }
+    foreach ($root in Get-WslEgressProtectedRoots) {
+        foreach ($name in @('Clash of Rust WSL', 'Clash of Rust')) {
+            $expected = [IO.Path]::GetFullPath((Join-Path $root ($name + '\clash-wsl-guardian.exe')))
+            if ($binary -ieq $expected) { return $true }
+        }
     }
     return $false
 }

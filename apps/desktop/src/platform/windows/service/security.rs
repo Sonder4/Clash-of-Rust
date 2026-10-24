@@ -89,7 +89,31 @@ impl Drop for Descriptor {
     }
 }
 
+/// Resolve the helper directory from the running executable when the product
+/// is installed in a `...\Clash of Rust` layout. The helper then lives beside
+/// the application (`...\Clash of Rust Network`), so a relocated installation
+/// such as `D:\Clash` stays self-contained without an environment override.
+/// Development builds in `target\release` do not match and keep the historical
+/// Program Files location.
+fn relocated_directory() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let directory = executable.parent()?;
+    let name = directory.file_name()?.to_str()?;
+    if name.eq_ignore_ascii_case("Clash of Rust Network") {
+        return Some(directory.to_path_buf());
+    }
+    if name.eq_ignore_ascii_case("Clash of Rust") {
+        return directory
+            .parent()
+            .map(|root| root.join("Clash of Rust Network"));
+    }
+    None
+}
+
 pub fn installed_directory() -> Result<PathBuf> {
+    if let Some(directory) = relocated_directory() {
+        return Ok(directory);
+    }
     let mut raw = std::ptr::null_mut();
     ensure!(
         unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, std::ptr::null_mut(), &mut raw) }

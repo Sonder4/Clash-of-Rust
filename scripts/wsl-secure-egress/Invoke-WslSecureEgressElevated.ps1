@@ -57,15 +57,29 @@ public static class CorWslUacPeer {
         try {
             var programFiles = Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
             var installed = Path.GetDirectoryName(Path.GetFullPath(executable));
-            if (!installed.StartsWith(programFiles + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                !ProtectedObject(executable)) return false;
-            var current = Path.GetFullPath(package);
-            while (!String.Equals(current, programFiles, StringComparison.OrdinalIgnoreCase)) {
-                if (!current.StartsWith(programFiles + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                    !ProtectedObject(current)) return false;
-                current = Path.GetDirectoryName(current);
+            // Program Files stays canonical. A relocated installation
+            // (D:\Clash\Clash of Rust) is trusted only through its own trusted
+            // root, and every directory up to that root must still be protected.
+            string root = null;
+            if (installed.StartsWith(programFiles + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) {
+                root = programFiles;
+            } else {
+                var parent = Path.GetDirectoryName(installed);
+                if (parent != null &&
+                    String.Equals(Path.GetFileName(installed), "Clash of Rust", StringComparison.OrdinalIgnoreCase)) {
+                    root = Path.GetFullPath(parent);
+                }
             }
-            if (!ProtectedObject(programFiles)) return false;
+            if (root == null || !ProtectedObject(executable)) return false;
+            var current = Path.GetFullPath(package);
+            while (!String.Equals(current, root, StringComparison.OrdinalIgnoreCase)) {
+                if (!current.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                    !ProtectedObject(current)) return false;
+                var next = Path.GetDirectoryName(current);
+                if (next == null || String.Equals(next, current, StringComparison.OrdinalIgnoreCase)) return false;
+                current = next;
+            }
+            if (!ProtectedObject(root)) return false;
             foreach (var entry in Directory.GetFileSystemEntries(package)) {
                 if (!ProtectedObject(entry)) return false;
                 if ((File.GetAttributes(entry) & FileAttributes.Directory) != 0) {

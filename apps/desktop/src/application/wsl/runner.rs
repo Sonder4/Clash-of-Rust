@@ -259,41 +259,66 @@ fn administrator_fallback(
 
 #[cfg(windows)]
 fn protected_installation(script: &std::path::Path) -> bool {
+    installation_roots()
+        .iter()
+        .any(|root| within_protected_root(script, root))
+}
+
+#[cfg(windows)]
+fn installation_roots() -> Vec<std::path::PathBuf> {
     use windows_sys::Win32::{
         System::Com::CoTaskMemFree,
         UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath},
     };
+    let mut roots = Vec::new();
     let mut raw = std::ptr::null_mut();
     if unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, std::ptr::null_mut(), &mut raw) }
-        < 0
+        >= 0
     {
-        return false;
-    }
-    let mut length = 0;
-    unsafe {
-        while *raw.add(length) != 0 {
-            length += 1;
+        let mut length = 0;
+        unsafe {
+            while *raw.add(length) != 0 {
+                length += 1;
+            }
+        }
+        let folder = unsafe { String::from_utf16(std::slice::from_raw_parts(raw, length)) };
+        unsafe { CoTaskMemFree(raw.cast()) };
+        if let Ok(folder) = folder {
+            roots.push(std::path::PathBuf::from(folder));
         }
     }
-    let folder = unsafe { String::from_utf16(std::slice::from_raw_parts(raw, length)) };
-    unsafe { CoTaskMemFree(raw.cast()) };
-    let Ok(folder) = folder else {
+    // A relocated installation keeps its elevated resources beside the
+    // application (`D:\Clash\Clash of Rust`); the same protected-ACL walk below
+    // still decides whether that root is trusted.
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            let relocated = directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Clash of Rust"));
+            if relocated {
+                if let Some(root) = directory.parent() {
+                    roots.push(root.to_path_buf());
+                }
+            }
+        }
+    }
+    roots
+}
+
+#[cfg(windows)]
+fn within_protected_root(script: &std::path::Path, root: &std::path::Path) -> bool {
+    let (Ok(script), Ok(root)) = (script.canonicalize(), root.canonicalize()) else {
         return false;
     };
-    let (Ok(script), Ok(folder)) = (
-        script.canonicalize(),
-        std::path::Path::new(&folder).canonicalize(),
-    ) else {
-        return false;
-    };
-    if !script.starts_with(&folder) {
+    if !script.starts_with(&root) {
         return false;
     }
     for path in script.ancestors() {
         if !elevation::protected_permissions(path) {
             return false;
         }
-        if path == folder {
+        if path == root {
             return true;
         }
     }
