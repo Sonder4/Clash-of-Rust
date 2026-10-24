@@ -505,7 +505,11 @@ fn apply_tun_route_excludes(tun: &mut Mapping, map: &Mapping) -> Result<()> {
         }
     }
     if let Some(Value::Mapping(dns)) = map.get(Value::from("dns")) {
-        for key in ["nameserver", "default-nameserver", "proxy-server-nameserver"] {
+        for key in [
+            "nameserver",
+            "default-nameserver",
+            "proxy-server-nameserver",
+        ] {
             if let Some(Value::Sequence(servers)) = dns.get(Value::from(key)) {
                 for server in servers {
                     if let Some(text) = server.as_str() {
@@ -532,7 +536,10 @@ fn apply_tun_route_excludes(tun: &mut Mapping, map: &Mapping) -> Result<()> {
         }
     }
     if !excludes.is_empty() {
-        tun.insert(Value::from("route-exclude-address"), Value::Sequence(excludes));
+        tun.insert(
+            Value::from("route-exclude-address"),
+            Value::Sequence(excludes),
+        );
     }
     Ok(())
 }

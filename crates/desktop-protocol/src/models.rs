@@ -43,7 +43,10 @@ impl ViewModels {
         checks: Vec<DetailItem>,
         logs: Vec<Text>,
     ) -> bool {
-        if self.wsl_generation.is_some_and(|current| generation < current) {
+        if self
+            .wsl_generation
+            .is_some_and(|current| generation < current)
+        {
             return false;
         }
         self.wsl_generation = Some(generation);

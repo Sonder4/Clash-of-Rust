@@ -485,7 +485,7 @@ impl App {
         text!(
             get_update_status,
             set_update_status,
-if !update::SELF_UPDATE_ENABLED {
+            if !update::SELF_UPDATE_ENABLED {
                 update::FORK_UPDATE_NOTICE
             } else {
                 self.updates
