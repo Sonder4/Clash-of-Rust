@@ -49,3 +49,8 @@ __pycache__/
 
 # Host-local WSL system backups (never reviewed source)
 docs/wsl-secure-egress/backups/
+
+# Local upstream reference clone
+/upstream-latest/
+# Issue comment drafts (private)
+/mihomo-3186-comment-draft.md
