@@ -556,7 +556,19 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:9090/configs' -Headers $h |
 
 **最终结论**：TUN 问题的完整根因链 = 多余虚拟适配器（VirtNet metric 35 / TAP）→ mihomo 自身出站豁免失效 → DNS 引导自劫持 + DIRECT 拨号回环。上游 DNS 设计、订阅规则、应用代码均无过错。修复 = 禁用两个遗留适配器。感谢用户的方向坚持。
 
-### 12.20 限制
+### 12.20 结论修正：真凶是 Windows 移动热点/ICS，VirtNet 与 TAP 无罪（2026-10-24 14:10–14:40，A/B/C 三面实证）
+
+按用户规程（备份→关闭程序→A/B 确认→确认后才卸载）执行，结果推翻 §12.19 的适配器归因：
+
+1. **备份**：还原点已建；驱动文件备份于 `D:\Clashackups\driver-orphan-20261024`（9 文件）。
+2. **A 面（适配器启用）**：PnP 层重新启用 VirtNet（Up）与 TAP（Disconnected）后，TUN 金丝雀 **baidu/cloudflare 双双 200**——适配器在场不破坏 TUN，**VirtNet/TAP 无罪，不予卸载**。
+3. **真凶锁定**：回溯全部记录，`本地连接* 3`（Microsoft Wi-Fi Direct Virtual Adapter，**192.168.137.1 = Windows 移动热点/ICS 会话**）在**所有失败测试中 Up**、在**所有成功测试中缺席**。程序化开启热点复现故障条件后：
+   - **B 面（热点 ON）**：baidu **ERR**、cloudflare 200——与原始"国外通、国内死"症状完全一致；
+   - **C 面（热点 OFF）**：baidu/cloudflare/api.deepseek/zcode 全通。
+4. **机制**：ICS（SharedAccess）启用的 Windows NAT/转发层吞掉内核**未绑定的 DIRECT 出站**（节点拨号走 auto-detect 绑定不受影响）——完整解释了全程所有症状，包括最早的"只有上行没有下行"。
+5. **最终修复指引**：**使用 TUN 时不要开移动热点/网络共享**；如需两者同时使用，属 Windows ICS 与 mihomo TUN 的真实冲突，值得连同本轮 A/B/C 证据提给 mihomo 上游。VirtNet/TAP/驱动均未卸载（还原点与备份保留作保险）。
+
+### 12.21 限制
 
 - `Meta` 在 t+60s 消失的触发者未定位（内核 stderr 无持久化日志）。
 - 未抓包；回环结论由内核 `reject loopback` 日志（内核自身承认）、路由表实测、SynSent/Established 分布三方支撑，为当前可达的最强证据等级。
