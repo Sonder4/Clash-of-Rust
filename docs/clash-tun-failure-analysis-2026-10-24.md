@@ -639,7 +639,20 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:9090/configs' -Headers $h |
 1. 手机连热点后在 WiFi 设置里配代理指向 `192.168.137.1:17890`——需应用开放 LAN 监听（当前生成器强制 `allow-lan: false` + 绑定 127.0.0.1；一行生成器改动即可支持"仅热点网段监听"，属 Rust 侧可做的小改动）；覆盖浏览器/多数应用的 TCP 流量，非 UDP 全量。
 2. 手机直接运行自己的代理客户端连 VPS（不经过电脑，零冲突全流量）。
 
-### 12.24 限制
+### 12.24 上游 issue 核实：问题已知且未修（2026-10-24 17:50）
+
+检索 MetaCubeX/mihomo issue 区，确认本机问题在上游有直接对应：
+
+| issue | 状态 | 内容 | 与本机的关系 |
+| --- | --- | --- | --- |
+| **#3186** [Bug] Windows: IPv4 forwarding on the bound outbound interface causes TUN self-reentry | **open（未修）** | 最新 Alpha + 最小 CLI 配置 + 显式 `interface-name` 绑定：物理出口接口 IPv4 `Forwarding=Enabled` 时 DIRECT 出站仍重入自身 TUN | **正是本机 P1 的根因**。ICS/热点正是动态启用 IPv4 转发的场景 |
+| #3186 评论（2026-09-23，另一用户） | — | Clash Verge Rev + v1.19.31：**WLAN 开转发→TUN 拨号全超时；关转发→baidu/google 全 200** | 与本机 A/B/C 实验结果完全一致（独立第三方复现） |
+| **#3229** [Feature] 检测物理出口 forwarding 并熔断 WSL mirrored self-reentry | open | WSL2 mirrored 也会动态把物理网卡置为 Forwarding=Enabled，触发同一 self-reentry；请求运行时检测/熔断 | 同类动态触发的补充场景（转发状态只在 ActiveStore，静态配置难发现） |
+| #3122 [Bug] Windows TUN: 核心自身节点拨号被当回环拒绝→重试风暴 | closed（GUI 配置规避） | strict-route 下节点拨号回环风暴根因与规避 | 本机日志的 `reject loopback` 同源机制的兄弟问题 |
+
+**核实结论**：本机问题 = mihomo 已知缺陷 #3186 + ICS/热点这个动态触发器。稳定版 v1.19.32/.33 均受影响（上游在 alpha 复现）。本机独有的新增证据维度：①ICS/移动热点触发路径（程序化开/关热点即开/关故障）；②吞吐量化（绑定路径 -58%/-74%）；③缓解矩阵（IP 排除与 DNS 钉扎可穿越）。可作为对 #3186 的补充评论提交，或作为 #3229 所请求的"运行时检测"的又一论据。
+
+### 12.25 限制
 
 - `Meta` 在 t+60s 消失的触发者未定位（内核 stderr 无持久化日志）。
 - 未抓包；回环结论由内核 `reject loopback` 日志（内核自身承认）、路由表实测、SynSent/Established 分布三方支撑，为当前可达的最强证据等级。
