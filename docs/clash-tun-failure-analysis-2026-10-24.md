@@ -605,7 +605,27 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:9090/configs' -Headers $h |
 
 **实用指引**：需要热点时用手机热点或 USB 共享（§12.20）；若必须电脑热点+TUN 同时，预期国内全断、国外不稳、VPS 吞吐减半。
 
-### 12.22 限制
+### 12.22 机制分析：热点为何破坏 TUN，及解决方案矩阵（2026-10-24 16:20–16:50）
+
+**机制（观测模型，基于 §12.20–12.21 全部实验证据）**：
+
+1. 热点激活时 Windows 启动 ICS 组件：WinNAT（winnat.sys，与 Hyper-V/WSL 同一 NAT 引擎）+ DHCP 分配器 + DNS 代理，并在 WFP（Windows 过滤平台）安装 NAT/重定向过滤规则、开启 WLAN 侧 IP 转发（实测路由表新增 3 条 192.168.137.x 路由）。
+2. mihomo 的出站分两类：**绑定物理网卡的拨号**（节点拨号，auto-detect 绑定 WLAN）与**未绑定拨号**（DNS 模块、DIRECT 直连）。热点 ON 时实测：绑定类存活（节点 200），未绑定类全灭（58 条 SynSent）——**ICS 在 WFP 层的过滤规则改变了未绑定套接字的自豁免裁决，将其重定向回 TUN 形成回环**；绑定套接字走的判定路径不受影响。
+3. 绑定类吞吐仍降 58%–74%：WinNAT 接管 WLAN 转发路径后，即使绑定流量也经 NAT 引擎逐包分类/翻译，长连接吞吐被削。
+4. **路由表级排除不受 ICS 影响**（IP 路由层低于 WFP 连接重定向）：ipgw/platform.deepseek/zcode 在热点下依然 200——重要的解法杠杆。
+5. sing-box 官方文档明确记载 `strict_route` 与 ICS 互斥（"may cause problems with Internet Connection Sharing"）；本机实测热点下 strict-route 的 PATCH 5 次全部失败无法应用——该分支正式排除。
+6. 国外站大面积 ERR 而 github/x.com 幸存：节点连接池被死拨号拖累后新连接不稳。
+
+**解决方案矩阵（按场景）**：
+
+| 场景 | 方案 | 状态 |
+| --- | --- | --- |
+| 偶尔共享网络 | 手机热点 / 手机 USB 共享（RNDIS） | 零冲突，推荐 |
+| 电脑热点+TUN 且只需 AI 端点 | 路由排除+校园 DNS 钉扎（`nameserver-policy` 三域 + IP 排除）；本轮已将 `+.bigmodel.cn` 加入钉扎补齐 CDN 漂移短板 | 热点下实测 platform.deepseek/zcode/ipgw 200；api.deepseek 另有移动 CDN 快速重置的独立问题 |
+| 完整共存（国内全通） | 无配置解（strict-route 与 ICS 官方互斥；chnroute 全表已否决） | 待 mihomo 上游修复（证据链就绪） |
+| 接受降级 | 热点+TUN 并存使用 | 国内全断、国外不稳、VPS 吞吐 -58%~-74% |
+
+### 12.23 限制
 
 - `Meta` 在 t+60s 消失的触发者未定位（内核 stderr 无持久化日志）。
 - 未抓包；回环结论由内核 `reject loopback` 日志（内核自身承认）、路由表实测、SynSent/Established 分布三方支撑，为当前可达的最强证据等级。
