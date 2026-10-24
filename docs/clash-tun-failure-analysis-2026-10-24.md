@@ -571,7 +571,41 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:9090/configs' -Headers $h |
 
 **补记（2026-10-24 14:50–15:10）**：联网查证两驱动均为第三方非 Windows 自带（VirtNet=ntkernel.com 虚拟网卡工具；TAP=OpenVPN 系客户端组件），经用户授权已用 `pnputil /delete-driver oem23.inf` 与 `oem0.inf` 彻底卸载并验证 CLEAN（"以太网 2"随之消失；备份与还原点保留）。**热点×TUN 共存实验**：先开 TUN 后开热点——热点激活瞬间 DIRECT 拨卡即死（baidu ERR、经节点仍 200），顺序无关，属 Windows ICS NAT 与内核未绑定 DIRECT 出站的硬冲突，配置层无解。替代方案：需要共享网络时用手机自身热点（不经电脑 ICS）或手机 USB 共享给电脑（RNDIS，不涉及 SharedAccess NAT）；二者与 TUN 无冲突。彻底共存需 mihomo 上游处理 ICS 兼容。
 
-### 12.21 限制
+### 12.21 规则+TUN+热点三开深度体检（2026-10-24 15:20–16:10，两窗口对照实测）
+
+用户要求对"规则+TUN+移动热点"三开状态做 DNS/流量/国内外站点/VPS 上下行的广泛详细记录。以"热点关+TUN"为基线窗口做同套对照。均为 finally 强制恢复窗口，恢复后全部复验 302/200。
+
+**A. DNS 分层（热点 ON）**：系统侧（经 TUN 劫持的解析）正常应答——baidu 490ms（真实 IP）、google/deepseek/zcode 1ms（缓存/fake-ip）；内核 `/dns/query` REST API 在两种状态下均 ~2s 报错（与热点无关，API 层问题，NOT_RUN 深查）。
+
+**B. 20 站矩阵（状态码@耗时，ERR=5s 超时除非注明）**：
+
+| 站点 | 热点 ON | 热点 OFF（基线） |
+| --- | --- | --- |
+| baidu/qq/taobao/bilibili/zhihu/weibo/jd/163（8 个国内站） | **全部 ERR** | **全部 200**（173–538ms） |
+| ipgw.neu.edu.cn（校园，已排除） | 200 @52ms | 200 @53ms |
+| open.bigmodel.cn（已排除 IP） | **ERR**（CDN 解析漂移） | 200 @113ms |
+| platform.deepseek.com | 200 @216ms | 200 @223ms |
+| api.deepseek.com | ERR @104ms（快速重置） | **ERR @92ms（与热点无关的独立问题：移动 CDN 对 TUN 路径快速重置，系统代理模式稳定 401）** |
+| zcode.z.ai | 200 @793ms | 200 @974ms |
+| google/youtube/cloudflare/wikipedia | **ERR** | 200（471–4714ms） |
+| openai.com | ERR | **ERR @598ms（独立问题：openai 对 VPS 出口拒绝，与热点无关）** |
+| github.com / x.com | 200（953–1885ms） | 200 |
+
+**C. VPS 上下行吞吐（speed.cloudflare.com 经 XUAN-VPS 节点）**：
+
+| 项目 | 热点 ON | 基线 | 退化 |
+| --- | --- | --- | --- |
+| 下载 25MB（经 17890） | 3.15 MB/s | 7.50 MB/s | **-58%** |
+| 下载 25MB（经 TUN 路径） | 3.09 MB/s | — | 与显式代理一致 |
+| 上传 5MB（经 17890） | 0.76 MB/s | 2.90 MB/s | **-74%** |
+
+**D. 连接与流量追踪**：热点 ON 时内核进程 58 条 `SynSent`（443×58/80×4，DIRECT 拨号坟场）+ Bound 77/Established 24；基线 **SynSent=0**、Established 64。Meta 适配器计数窗口内收 26.7MB（25MB 测试下载经 TUN 转发确认）。路由表：热点 ON 时 `本地连接* 3` 出现 ICS 三条路由（/24+/32×2），TUN 侧无路由表变化（sing-tun Windows 模式）。
+
+**E. 结论**：① 热点 ON 的破坏面比"国内直连"更广——国外站也大面积 ERR（仅 github/x.com 存活，节点连接池被 58 条死拨号拖累后新流不稳），且 **VPS 吞吐下降 58%–74%**；② bigmodel 在热点 ON 下因 CDN 解析漂移再次失败（复现 §12.18 机制）；③ api.deepseek 的 TUN 快速重置与 openai 的出口拒绝是两个与热点无关的独立小问题；④ debug 日志流（/logs）在 CLI 后台所有者的内核上不可用（两种窗口均 0 行），日志级取证 NOT_RUN，不影响上述行为层结论。
+
+**实用指引**：需要热点时用手机热点或 USB 共享（§12.20）；若必须电脑热点+TUN 同时，预期国内全断、国外不稳、VPS 吞吐减半。
+
+### 12.22 限制
 
 - `Meta` 在 t+60s 消失的触发者未定位（内核 stderr 无持久化日志）。
 - 未抓包；回环结论由内核 `reject loopback` 日志（内核自身承认）、路由表实测、SynSent/Established 分布三方支撑，为当前可达的最强证据等级。
